@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-DEPOT_ADDRESS = "Av. Amadeo Sabattini 4500, X5016 Córdoba, Argentina"
+DEPOT_ADDRESS = "Depósito San Isidro EDASA Coca Cola, Córdoba, Argentina""
 MINUTOS_POR_PARADA = 20
 MAX_HORAS_JORNADA = 7.5
 
