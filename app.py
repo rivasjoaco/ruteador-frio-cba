@@ -186,13 +186,32 @@ if uploaded_file is not None:
 
                     st.markdown("**Secuencia Óptima:**")
                     paso = 1
+                    
+                    # Armar el texto estructurado de paradas para WhatsApp
+                    texto_paradas_wa = ""
                     for _, item in sub_df_ordenado.iterrows():
+                        # Obtener observación o valor por defecto si está vacía
+                        obs = str(item['Observacion']) if 'Observacion' in item and pd.notna(item['Observacion']) else "Sin observaciones"
+                        
+                        # Mostrar en la app web
                         st.write(f"**{paso}.** [{item['ID Orden']}] {item['Cliente / Local']} - *{item['Prioridad']}*")
+                        
+                        # Acumular línea para WhatsApp
+                        texto_paradas_wa += f"%0A{paso}. {item['Cliente / Local']} - {item['Dirección']}%0A   • Obs: {obs}%0A"
                         paso += 1
 
                     st.link_button("🗺️ Abrir Hoja de Ruta en Google Maps", link_maps)
                     
-                    msg_wa = f"Hola! Hoja de Ruta para {v_nombre} (Depósito San Isidro):%0A%0ALink Google Maps:%0A{urllib.parse.quote(link_maps)}"
+                    # Plantilla del mensaje de WhatsApp con resumen completo
+                    msg_wa = (
+                        f"🚚 *HOJA DE RUTA - {v_nombre.upper()}*%0A"
+                        f"📍 *Depósito de Salida:* Depósito San Isidro%0A"
+                        f"📊 *Total de visitas:* {len(sub_df_ordenado)} paradas%0A%0A"
+                        f"📋 *DETALLE DE PUNTOS:*%0A"
+                        f"{texto_paradas_wa}%0A"
+                        f"🔗 *Link de Google Maps:*%0A{urllib.parse.quote(link_maps)}"
+                    )
+                    
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
 
                 # Actualizar DataFrame principal
