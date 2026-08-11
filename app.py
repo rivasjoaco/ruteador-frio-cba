@@ -86,7 +86,7 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # 1. Función de limpieza ultra-robusta
+    # 1. Función de limpieza ultra-robusta de la dirección
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
             return ""
@@ -96,7 +96,7 @@ if uploaded_file is not None:
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
         # Reemplazar caracteres problemáticos por espacios
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
-        # Eliminar sufijos de SAP que rompen la geolocalización (Piso, Dpto, Lote, Local, etc)
+        # Eliminar sufijos de SAP que rompen la geolocalización
         patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL)\b.*'
         dir_str = re.sub(patron_basura, '', dir_str)
         # Limpiar espacios múltiples
@@ -106,20 +106,26 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # 2. Búsqueda en cascada en Google Maps API
+    # 2. Búsqueda priorizando el Código Postal (TU LÓGICA)
     def geocodificar_google(dir_texto, cp_texto):
         prov = config_actual['provincia']
         ciudad = config_actual['ciudad']
         
-        queries = [
-            f"{dir_texto}, {ciudad}, {prov}, Argentina",
-            f"{dir_texto}, {prov}, Argentina",
-            f"{dir_texto}, CP {cp_texto}, {prov}, Argentina" if pd.notna(cp_texto) else None,
-            f"{dir_texto}, Argentina"
-        ]
+        # Limpiar el CP por si Excel lo trae como decimal (ej: 5000.0)
+        cp_limpio = str(cp_texto).replace('.0', '').strip() if pd.notna(cp_texto) else ""
+        
+        queries = []
+        
+        # Prioridad 1: Anclado al Código Postal (Lo más exacto)
+        if cp_limpio and cp_limpio.lower() != "nan":
+            queries.append(f"{dir_texto}, {cp_limpio}, Argentina")
+            queries.append(f"{dir_texto}, CP {cp_limpio}, {prov}, Argentina")
+            
+        # Prioridad 2: Respaldo por Ciudad / Provincia
+        queries.append(f"{dir_texto}, {ciudad}, {prov}, Argentina")
+        queries.append(f"{dir_texto}, {prov}, Argentina")
         
         for q in queries:
-            if not q: continue
             try:
                 res = gmaps.geocode(q, region='ar', components={"country": "AR"})
                 if res and len(res) > 0:
@@ -151,7 +157,7 @@ if uploaded_file is not None:
     direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
     no_encontradas = []
 
-    with st.spinner("Consultando direcciones con Google Maps..."):
+    with st.spinner("Consultando ubicaciones por Código Postal y Dirección..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             cp_val = row_dir[col_cp]
@@ -160,7 +166,7 @@ if uploaded_file is not None:
                 continue
 
             d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
-            cache_key = f"{d_actual}_{config_actual['provincia']}"
+            cache_key = f"{d_actual}_{cp_val}_{config_actual['provincia']}"
 
             if cache_key not in st.session_state.coords_cache_gmaps:
                 lat, lng, formatted_addr, exito = geocodificar_google(d_actual, cp_val)
@@ -197,7 +203,7 @@ if uploaded_file is not None:
                         st.rerun()
                 st.divider()
     else:
-        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la planilla!")
+        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones usando los Códigos Postales!")
 
     # 4. Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
@@ -210,7 +216,8 @@ if uploaded_file is not None:
             grupos_locales = []
             for dir_orig, group in df_filtrado_activo.groupby('direccion_limpia'):
                 dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
-                cache_key = f"{dir_final}_{config_actual['provincia']}"
+                cp_val = group[col_cp].iloc[0]
+                cache_key = f"{dir_final}_{cp_val}_{config_actual['provincia']}"
                 
                 if cache_key in st.session_state.coords_cache_gmaps:
                     lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
