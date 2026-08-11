@@ -4,6 +4,7 @@ import numpy as np
 import urllib.parse
 import requests
 import re
+import time
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
@@ -87,7 +88,7 @@ if uploaded_file is not None:
             f"{dir_texto}, Mendoza, Argentina" if prov == "Mendoza" else f"{dir_texto}, Córdoba, Argentina",
             f"{dir_texto}, CP {cp_texto}, Argentina"
         ]
-        headers = {'User-Agent': 'RuteadorFriov7/1.0'}
+        headers = {'User-Agent': 'RuteadorFriov8/1.0'}
         
         for q in intentos:
             try:
@@ -99,16 +100,19 @@ if uploaded_file is not None:
                     'viewbox': config_actual['viewbox'],
                     'bounded': 0
                 }
-                resp = requests.get(url, params=params, headers=headers, timeout=4)
+                resp = requests.get(url, params=params, headers=headers, timeout=3)
                 data = resp.json()
                 if data:
                     return float(data[0]['lat']), float(data[0]['lon']), True
             except Exception:
                 pass
+            time.sleep(0.2) # Pausa mínima para no saturar
         
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], False
 
-    # Inicializar estado de sesiones para correcciones y descartes
+    # Inicializar memoria de sesión para no repetir búsquedas
+    if "coords_cache" not in st.session_state:
+        st.session_state.coords_cache = {}
     if "direcciones_editadas" not in st.session_state:
         st.session_state.direcciones_editadas = {}
     if "direcciones_descartadas" not in st.session_state:
@@ -117,30 +121,30 @@ if uploaded_file is not None:
     st.divider()
     st.markdown("### 🔍 Validación Previa de Ubicaciones")
 
-    with st.spinner("Verificando geolocalización de las paradas..."):
-        direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
+    direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
+    no_encontradas = []
+
+    for _, row_dir in direcciones_unicas.iterrows():
+        d_orig = row_dir['direccion_limpia']
+        cp_val = row_dir[col_cp]
         
-        no_encontradas = []
-        coordenadas_dict = {}
+        if d_orig in st.session_state.direcciones_descartadas:
+            continue
 
-        for _, row_dir in direcciones_unicas.iterrows():
-            d_orig = row_dir['direccion_limpia']
-            cp_val = row_dir[col_cp]
-            
-            # Omitir si fue descartada por el usuario
-            if d_orig in st.session_state.direcciones_descartadas:
-                continue
+        d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
+        cache_key = f"{d_actual}_{cp_val}_{config_actual['provincia']}"
 
-            # Usar dirección corregida si existe
-            d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
-            
+        # Consultar la API solo si no está en caché
+        if cache_key not in st.session_state.coords_cache:
             lat, lng, exito = geocodificar_direccion(d_actual, cp_val)
-            coordenadas_dict[d_orig] = (lat, lng)
-            
-            if not exito:
-                no_encontradas.append((d_orig, d_actual))
+            st.session_state.coords_cache[cache_key] = (lat, lng, exito)
+        
+        lat, lng, exito = st.session_state.coords_cache[cache_key]
+        
+        if not exito:
+            no_encontradas.append((d_orig, d_actual))
 
-    # Excluir descartadas del procesamiento
+    # Excluir descartadas
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
@@ -155,8 +159,7 @@ if uploaded_file is not None:
                     nueva_dir = st.text_input(
                         label=f"Dirección (Original: '{d_orig}')",
                         value=d_actual,
-                        key=f"input_{d_orig}",
-                        help="Ej: Agregar 'Godoy Cruz', 'Guaymallén', 'Luján de Cuyo', o eliminar pisos/dptos."
+                        key=f"input_{d_orig}"
                     )
                 
                 with c2:
@@ -164,6 +167,10 @@ if uploaded_file is not None:
                     st.write(" ")
                     if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
                         st.session_state.direcciones_editadas[d_orig] = nueva_dir
+                        # Limpiar caché previa de esta dirección para forzar nueva búsqueda
+                        for k in list(st.session_state.coords_cache.keys()):
+                            if d_orig in k or d_actual in k:
+                                del st.session_state.coords_cache[k]
                         st.rerun()
 
                 with c3:
@@ -190,9 +197,14 @@ if uploaded_file is not None:
             # Agrupar por dirección física activa
             grupos_locales = []
             for dir_orig, group in df_filtrado_activo.groupby('direccion_limpia'):
-                lat, lng = coordenadas_dict.get(dir_orig, config_actual["depot_coords"])
                 dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
+                cache_key = f"{dir_final}_{group[col_cp].iloc[0]}_{config_actual['provincia']}"
                 
+                if cache_key in st.session_state.coords_cache:
+                    lat, lng, _ = st.session_state.coords_cache[cache_key]
+                else:
+                    lat, lng = config_actual["depot_coords"]
+
                 detalles_ordenes = []
                 for _, row in group.iterrows():
                     detalles_ordenes.append({
