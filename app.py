@@ -36,7 +36,7 @@ MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
 
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
-st.subheader("Ruteador Multirregión con Validación Interactiva")
+st.subheader("Ruteador Multirregión con Gestión de Excepciones")
 
 uploaded_file = st.file_uploader("Cargar planilla de órdenes (.xlsx)", type=["xlsx"])
 
@@ -71,7 +71,7 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # Función de limpieza básica de texto
+    # Limpieza de dirección
     def limpiar_direccion(dir_raw):
         dir_str = str(dir_raw).strip()
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
@@ -79,7 +79,7 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # Búsqueda de coordenadas
+    # Función de geocodificación
     def geocodificar_direccion(dir_texto, cp_texto):
         prov = config_actual['provincia']
         intentos = [
@@ -87,7 +87,7 @@ if uploaded_file is not None:
             f"{dir_texto}, Mendoza, Argentina" if prov == "Mendoza" else f"{dir_texto}, Córdoba, Argentina",
             f"{dir_texto}, CP {cp_texto}, Argentina"
         ]
-        headers = {'User-Agent': 'RuteadorFriov6/1.0'}
+        headers = {'User-Agent': 'RuteadorFriov7/1.0'}
         
         for q in intentos:
             try:
@@ -108,9 +108,11 @@ if uploaded_file is not None:
         
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], False
 
-    # Paso de Pre-Validación de Direcciones
+    # Inicializar estado de sesiones para correcciones y descartes
     if "direcciones_editadas" not in st.session_state:
         st.session_state.direcciones_editadas = {}
+    if "direcciones_descartadas" not in st.session_state:
+        st.session_state.direcciones_descartadas = set()
 
     st.divider()
     st.markdown("### 🔍 Validación Previa de Ubicaciones")
@@ -125,7 +127,11 @@ if uploaded_file is not None:
             d_orig = row_dir['direccion_limpia']
             cp_val = row_dir[col_cp]
             
-            # Usar dirección corregida si existe en session_state
+            # Omitir si fue descartada por el usuario
+            if d_orig in st.session_state.direcciones_descartadas:
+                continue
+
+            # Usar dirección corregida si existe
             d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
             
             lat, lng, exito = geocodificar_direccion(d_actual, cp_val)
@@ -134,32 +140,56 @@ if uploaded_file is not None:
             if not exito:
                 no_encontradas.append((d_orig, d_actual))
 
+    # Excluir descartadas del procesamiento
+    df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
+
     if no_encontradas:
-        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** en {config_actual['provincia']} que no pudieron ser ubicadas de forma automática. Podés corregir el texto acá mismo antes de procesar:")
-        
-        with st.form("form_correccion_direcciones"):
-            for d_orig, d_actual in no_encontradas:
-                nueva_dir = st.text_input(
-                    label=f"Dirección no encontrada (Original: '{d_orig}')",
-                    value=d_actual,
-                    key=f"input_{d_orig}",
-                    help="Ejemplo de corrección: Agregar departamento como 'Godoy Cruz', 'Guaymallén', 'Luján de Cuyo', o eliminar pisos/dptos."
-                )
-                st.session_state.direcciones_editadas[d_orig] = nueva_dir
-            
-            submit_correccion = st.form_submit_button("🔄 Aplicar Correcciones y Re-validar")
-            if submit_correccion:
-                st.rerun()
+        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** en {config_actual['provincia']} que no pudieron ser ubicadas de forma automática.")
+        st.markdown("Podés intentar corregir el texto o descartarla para el reparto de hoy:")
+
+        for d_orig, d_actual in no_encontradas:
+            with st.container():
+                c1, c2, c3 = st.columns([3, 1, 1])
+                
+                with c1:
+                    nueva_dir = st.text_input(
+                        label=f"Dirección (Original: '{d_orig}')",
+                        value=d_actual,
+                        key=f"input_{d_orig}",
+                        help="Ej: Agregar 'Godoy Cruz', 'Guaymallén', 'Luján de Cuyo', o eliminar pisos/dptos."
+                    )
+                
+                with c2:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
+                        st.session_state.direcciones_editadas[d_orig] = nueva_dir
+                        st.rerun()
+
+                with c3:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("❌ Descartar", key=f"discard_{d_orig}"):
+                        st.session_state.direcciones_descartadas.add(d_orig)
+                        st.rerun()
+                st.divider()
     else:
-        st.success("✅ ¡Todas las direcciones fueron ubicadas correctamente en el mapa!")
+        st.success("✅ ¡Todas las direcciones activas fueron ubicadas correctamente en el mapa!")
+
+    if len(st.session_state.direcciones_descartadas) > 0:
+        st.info(f"ℹ️ Se descartaron **{len(st.session_state.direcciones_descartadas)} dirección(es)** para el ruteo de hoy.")
 
     # Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
+        if df_filtrado_activo.empty:
+            st.error("No hay direcciones válidas para procesar el ruteo.")
+            st.stop()
+
         with st.spinner(f"Agrupando locales y calculando rutas óptimas en {config_actual['provincia']}..."):
             
-            # Agrupar por dirección física
+            # Agrupar por dirección física activa
             grupos_locales = []
-            for dir_orig, group in df_filtrado.groupby('direccion_limpia'):
+            for dir_orig, group in df_filtrado_activo.groupby('direccion_limpia'):
                 lat, lng = coordenadas_dict.get(dir_orig, config_actual["depot_coords"])
                 dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
                 
@@ -193,12 +223,12 @@ if uploaded_file is not None:
             if total_locales_unicos > CAPACIDAD_TOTAL_FLOTA:
                 st.info(
                     f"💡 **AVISO DE CAPACIDAD DE FLOTA:**\n\n"
-                    f"Ingresaron **{len(df_filtrado)} órdenes** repartidas en **{total_locales_unicos} direcciones únicas**.\n\n"
+                    f"Ingresaron **{len(df_filtrado_activo)} órdenes válidas** repartidas en **{total_locales_unicos} direcciones únicas**.\n\n"
                     f"Saliendo con **2 vehículos**, se cubrirán las primeras **{CAPACIDAD_TOTAL_FLOTA} ubicaciones prioritarias** de hoy."
                 )
                 df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
 
-            # Asignación de vehículos (K-Means)
+            # Asignación de vehículos
             usar_dos = len(df_locales) >= 6
             depot_lat, depot_lng = config_actual["depot_coords"]
 
@@ -327,6 +357,12 @@ if uploaded_file is not None:
                     )
                     
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
+
+            # Marcar descartadas en el Excel final
+            for d_disc in st.session_state.direcciones_descartadas:
+                indices_disc = df[df[col_direccion].apply(limpiar_direccion) == d_disc].index
+                for idx_d in indices_disc:
+                    df.loc[idx_d, 'Estado'] = 'Dirección No Encontrada'
 
             # Botón de Descargar Excel
             st.divider()
