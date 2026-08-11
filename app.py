@@ -28,15 +28,15 @@ CENTROS_CONFIG = {
         "depot_address": "Alsina 2336, M5501 Godoy Cruz, Mendoza, Argentina",
         "depot_coords": (-32.923, -68.835),
         "provincia": "Mendoza",
-        "viewbox": "-68.95,-33.00,-68.75,-32.80"
+        "viewbox": "-68.95,-33.10,-68.65,-32.70"
     }
 }
 
-MINUTOS_POR_PARADA = 25  # Tiempo promedio de atención por punto
-MAX_HORAS_JORNADA = 7.5  # Horas límite por técnico al día
+MINUTOS_POR_PARADA = 25
+MAX_HORAS_JORNADA = 7.5
 
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
-st.subheader("Ruteador Multirregión de Operaciones")
+st.subheader("Ruteador Multirregión con Validación Interactiva")
 
 uploaded_file = st.file_uploader("Cargar planilla de órdenes (.xlsx)", type=["xlsx"])
 
@@ -49,7 +49,7 @@ if uploaded_file is not None:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Mapeo de columnas por posición
+    # Columnas principales por posición
     col_orden = df.columns[0]      # Col A: Orden
     col_cliente = df.columns[2]    # Col C: Cliente
     col_direccion = df.columns[3]  # Col D: Dirección
@@ -71,54 +71,98 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
-        with st.spinner(f"Limpiando direcciones, agrupando locales y calculando rutas en {config_actual['provincia']}..."):
+    # Función de limpieza básica de texto
+    def limpiar_direccion(dir_raw):
+        dir_str = str(dir_raw).strip()
+        dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
+        return dir_str
+
+    df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
+
+    # Búsqueda de coordenadas
+    def geocodificar_direccion(dir_texto, cp_texto):
+        prov = config_actual['provincia']
+        intentos = [
+            f"{dir_texto}, {prov}, Argentina",
+            f"{dir_texto}, Mendoza, Argentina" if prov == "Mendoza" else f"{dir_texto}, Córdoba, Argentina",
+            f"{dir_texto}, CP {cp_texto}, Argentina"
+        ]
+        headers = {'User-Agent': 'RuteadorFriov6/1.0'}
+        
+        for q in intentos:
+            try:
+                url = "https://nominatim.openstreetmap.org/search"
+                params = {
+                    'q': q,
+                    'format': 'json',
+                    'limit': 1,
+                    'viewbox': config_actual['viewbox'],
+                    'bounded': 0
+                }
+                resp = requests.get(url, params=params, headers=headers, timeout=4)
+                data = resp.json()
+                if data:
+                    return float(data[0]['lat']), float(data[0]['lon']), True
+            except Exception:
+                pass
+        
+        return config_actual["depot_coords"][0], config_actual["depot_coords"][1], False
+
+    # Paso de Pre-Validación de Direcciones
+    if "direcciones_editadas" not in st.session_state:
+        st.session_state.direcciones_editadas = {}
+
+    st.divider()
+    st.markdown("### 🔍 Validación Previa de Ubicaciones")
+
+    with st.spinner("Verificando geolocalización de las paradas..."):
+        direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
+        
+        no_encontradas = []
+        coordenadas_dict = {}
+
+        for _, row_dir in direcciones_unicas.iterrows():
+            d_orig = row_dir['direccion_limpia']
+            cp_val = row_dir[col_cp]
             
-            # Limpieza inteligente de dirección (Saca ceros a la izquierda tipo 00057 -> 57)
-            def limpiar_direccion(dir_raw):
-                dir_str = str(dir_raw).strip()
-                # Reemplazar números con ceros a la izquierda por su valor numérico limpio
-                dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
-                return dir_str
+            # Usar dirección corregida si existe en session_state
+            d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
+            
+            lat, lng, exito = geocodificar_direccion(d_actual, cp_val)
+            coordenadas_dict[d_orig] = (lat, lng)
+            
+            if not exito:
+                no_encontradas.append((d_orig, d_actual))
 
-            df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
+    if no_encontradas:
+        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** en {config_actual['provincia']} que no pudieron ser ubicadas de forma automática. Podés corregir el texto acá mismo antes de procesar:")
+        
+        with st.form("form_correccion_direcciones"):
+            for d_orig, d_actual in no_encontradas:
+                nueva_dir = st.text_input(
+                    label=f"Dirección no encontrada (Original: '{d_orig}')",
+                    value=d_actual,
+                    key=f"input_{d_orig}",
+                    help="Ejemplo de corrección: Agregar departamento como 'Godoy Cruz', 'Guaymallén', 'Luján de Cuyo', o eliminar pisos/dptos."
+                )
+                st.session_state.direcciones_editadas[d_orig] = nueva_dir
+            
+            submit_correccion = st.form_submit_button("🔄 Aplicar Correcciones y Re-validar")
+            if submit_correccion:
+                st.rerun()
+    else:
+        st.success("✅ ¡Todas las direcciones fueron ubicadas correctamente en el mapa!")
 
-            # Geocodificación progresiva
-            def obtener_coords_robustas(dir_limpia, cp):
-                prov = config_actual['provincia']
-                # Intento 1: Dirección + CP
-                intentos = [
-                    f"{dir_limpia}, CP {cp}, {prov}, Argentina",
-                    f"{dir_limpia}, {prov}, Argentina"
-                ]
-                headers = {'User-Agent': 'RuteadorFriov5/1.0'}
-                
-                for query in intentos:
-                    try:
-                        url = "https://nominatim.openstreetmap.org/search"
-                        params = {
-                            'q': query,
-                            'format': 'json',
-                            'limit': 1,
-                            'viewbox': config_actual['viewbox'],
-                            'bounded': 1
-                        }
-                        resp = requests.get(url, params=params, headers=headers, timeout=4)
-                        data = resp.json()
-                        if data:
-                            return float(data[0]['lat']), float(data[0]['lon'])
-                    except Exception:
-                        pass
-                
-                # Coordenadas por defecto si no ubica la calle exacta
-                return config_actual["depot_coords"]
-
-            # Agrupar órdenes que comparten la misma dirección física
+    # Botón principal de Ruteo
+    if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
+        with st.spinner(f"Agrupando locales y calculando rutas óptimas en {config_actual['provincia']}..."):
+            
+            # Agrupar por dirección física
             grupos_locales = []
-            for dir_fisi, group in df_filtrado.groupby('direccion_limpia'):
-                lat, lng = obtener_coords_robustas(dir_fisi, group[col_cp].iloc[0])
+            for dir_orig, group in df_filtrado.groupby('direccion_limpia'):
+                lat, lng = coordenadas_dict.get(dir_orig, config_actual["depot_coords"])
+                dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
                 
-                # Lista de activos y órdenes del mismo local
                 detalles_ordenes = []
                 for _, row in group.iterrows():
                     detalles_ordenes.append({
@@ -130,7 +174,7 @@ if uploaded_file is not None:
                     })
                 
                 grupos_locales.append({
-                    'direccion': dir_fisi,
+                    'direccion': dir_final,
                     'cliente_principal': group[col_cliente].iloc[0],
                     'lat': lat,
                     'lng': lng,
@@ -142,17 +186,15 @@ if uploaded_file is not None:
             df_locales = pd.DataFrame(grupos_locales)
             total_locales_unicos = len(df_locales)
 
-            # Capacidad de la Flota (2 vehículos)
-            # Cada auto puede hacer aprox 7 u 8 paradas en 7.5 hs (considerando viaje + 25 min atención)
+            # Capacidad de Flota
             PARADAS_MAX_POR_VEHICULO = 8
             CAPACIDAD_TOTAL_FLOTA = PARADAS_MAX_POR_VEHICULO * 2
 
             if total_locales_unicos > CAPACIDAD_TOTAL_FLOTA:
-                st.warning(
-                    f"⚠️ **RECOMENDACIÓN DE CAPACIDAD DE FLOTA:**\n\n"
+                st.info(
+                    f"💡 **AVISO DE CAPACIDAD DE FLOTA:**\n\n"
                     f"Ingresaron **{len(df_filtrado)} órdenes** repartidas en **{total_locales_unicos} direcciones únicas**.\n\n"
-                    f"👉 **Hoy podrías cubrir un máximo de {CAPACIDAD_TOTAL_FLOTA} ubicaciones** saliendo con los **2 vehículos** (~7.5 hs de jornada por técnico).\n\n"
-                    f"Se procesan las primeras {CAPACIDAD_TOTAL_FLOTA} paradas prioritarias para el reparto de hoy."
+                    f"Saliendo con **2 vehículos**, se cubrirán las primeras **{CAPACIDAD_TOTAL_FLOTA} ubicaciones prioritarias** de hoy."
                 )
                 df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
 
@@ -168,7 +210,7 @@ if uploaded_file is not None:
             else:
                 df_locales['Vehículo Asignado'] = 'Vehículo 1'
 
-            # Ruteo con OR-Tools
+            # OR-Tools Solver
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
                 for _, row in df_grupo.iterrows():
@@ -238,7 +280,6 @@ if uploaded_file is not None:
                 waypoints_encoded = "|".join([urllib.parse.quote(f"{d}, {config_actual['provincia']}") for d in direcciones_ordenadas])
                 link_maps = f"https://www.google.com/maps/dir/?api=1&origin={origen_encoded}&destination={origen_encoded}&waypoints={waypoints_encoded}&travelmode=driving"
                 
-                # Estimación de tiempo
                 tiempo_est = (km_v / 25.0) + ((len(sub_df_ordenado) * MINUTOS_POR_PARADA) / 60.0)
 
                 with cols[idx_col]:
@@ -253,7 +294,7 @@ if uploaded_file is not None:
                     
                     for _, local in sub_df_ordenado.iterrows():
                         cant_ord = local['cant_ordenes']
-                        st.write(f"**{paso}.** **{local['cliente_principal']}** - {local['direccion']} *(Órdenes en este punto: {cant_ord})*")
+                        st.write(f"**{paso}.** **{local['cliente_principal']}** - {local['direccion']} *(Órdenes: {cant_ord})*")
                         
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']} - {local['direccion']}*%0A"
                         if cant_ord > 1:
@@ -265,7 +306,6 @@ if uploaded_file is not None:
                                 f"     Tel: {det['tel']} | Obs: {det['obs']}%0A"
                             )
 
-                            # Actualizar DataFrame principal
                             for orig_idx in local['indices_originales']:
                                 df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
                                 df.loc[orig_idx, 'Estado'] = 'En Ruta'
@@ -288,7 +328,7 @@ if uploaded_file is not None:
                     
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
 
-            # Botón de Descargar Excel procesado
+            # Botón de Descargar Excel
             st.divider()
             output_name = "ordenes_despachadas.xlsx"
             df.to_excel(output_name, index=False)
