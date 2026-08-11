@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import urllib.parse
-import requests
 import re
-import time
+import googlemaps
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
@@ -21,15 +20,13 @@ CENTROS_CONFIG = {
         "codigos": ["0960", "960"],
         "depot_address": "Depósito San Isidro EDASA Coca Cola X5016 Córdoba, Argentina",
         "depot_coords": (-31.442, -64.148),
-        "provincia": "Córdoba",
-        "viewbox": "-64.30,-31.50,-64.00,-31.30"
+        "provincia": "Córdoba"
     },
     "Mendoza (Centro 0962)": {
         "codigos": ["0962", "962"],
         "depot_address": "Alsina 2336, M5501 Godoy Cruz, Mendoza, Argentina",
         "depot_coords": (-32.923, -68.835),
-        "provincia": "Mendoza",
-        "viewbox": "-68.95,-33.10,-68.65,-32.70"
+        "provincia": "Mendoza"
     }
 }
 
@@ -37,7 +34,22 @@ MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
 
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
-st.subheader("Ruteador Multirregión con Gestión de Excepciones")
+st.subheader("Ruteador Multirregión (Motor de Geolocalización Google Maps)")
+
+# Campo para ingresar la API Key de Google Maps
+st.sidebar.header("⚙️ Configuración Google Maps")
+google_api_key = st.sidebar.text_input("Ingrese Google Maps API Key:", type="password")
+
+if not google_api_key:
+    st.info("👈 **Para comenzar, ingresá tu Google Maps API Key en el menú lateral izquierdo.**")
+    st.stop()
+
+# Inicializar cliente de Google Maps
+try:
+    gmaps = googlemaps.Client(key=google_api_key)
+except Exception as e:
+    st.error(f"Error al conectar con la API de Google Maps: {e}")
+    st.stop()
 
 uploaded_file = st.file_uploader("Cargar planilla de órdenes (.xlsx)", type=["xlsx"])
 
@@ -72,7 +84,7 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # Limpieza de dirección
+    # Limpieza de dirección para quitar ceros a la izquierda de SAP
     def limpiar_direccion(dir_raw):
         dir_str = str(dir_raw).strip()
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
@@ -80,46 +92,27 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # Función de geocodificación
-    def geocodificar_direccion(dir_texto, cp_texto):
-        prov = config_actual['provincia']
-        intentos = [
-            f"{dir_texto}, {prov}, Argentina",
-            f"{dir_texto}, Mendoza, Argentina" if prov == "Mendoza" else f"{dir_texto}, Córdoba, Argentina",
-            f"{dir_texto}, CP {cp_texto}, Argentina"
-        ]
-        headers = {'User-Agent': 'RuteadorFriov8/1.0'}
-        
-        for q in intentos:
-            try:
-                url = "https://nominatim.openstreetmap.org/search"
-                params = {
-                    'q': q,
-                    'format': 'json',
-                    'limit': 1,
-                    'viewbox': config_actual['viewbox'],
-                    'bounded': 0
-                }
-                resp = requests.get(url, params=params, headers=headers, timeout=3)
-                data = resp.json()
-                if data:
-                    return float(data[0]['lat']), float(data[0]['lon']), True
-            except Exception:
-                pass
-            time.sleep(0.2) # Pausa mínima para no saturar
-        
-        return config_actual["depot_coords"][0], config_actual["depot_coords"][1], False
+    # Geolocalización ultra-precisa con Google Maps
+    def geocodificar_google(dir_texto, cp_texto):
+        query = f"{dir_texto}, {config_actual['provincia']}, Argentina"
+        try:
+            geocode_result = gmaps.geocode(query)
+            if geocode_result:
+                location = geocode_result[0]['geometry']['location']
+                formatted_address = geocode_result[0]['formatted_address']
+                return location['lat'], location['lng'], formatted_address, True
+        except Exception:
+            pass
+        return config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_texto, False
 
-    # Inicializar memoria de sesión para no repetir búsquedas
-    if "coords_cache" not in st.session_state:
-        st.session_state.coords_cache = {}
-    if "direcciones_editadas" not in st.session_state:
-        st.session_state.direcciones_editadas = {}
+    # Memoria en sesión para coordenadas
+    if "coords_cache_gmaps" not in st.session_state:
+        st.session_state.coords_cache_gmaps = {}
     if "direcciones_descartadas" not in st.session_state:
         st.session_state.direcciones_descartadas = set()
 
     st.divider()
-    st.markdown("### 🔍 Validación Previa de Ubicaciones")
+    st.markdown("### 🔍 Validación con Google Maps")
 
     direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
     no_encontradas = []
@@ -131,60 +124,29 @@ if uploaded_file is not None:
         if d_orig in st.session_state.direcciones_descartadas:
             continue
 
-        d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
-        cache_key = f"{d_actual}_{cp_val}_{config_actual['provincia']}"
+        cache_key = f"{d_orig}_{config_actual['provincia']}"
 
-        # Consultar la API solo si no está en caché
-        if cache_key not in st.session_state.coords_cache:
-            lat, lng, exito = geocodificar_direccion(d_actual, cp_val)
-            st.session_state.coords_cache[cache_key] = (lat, lng, exito)
+        if cache_key not in st.session_state.coords_cache_gmaps:
+            lat, lng, formatted_addr, exito = geocodificar_google(d_orig, cp_val)
+            st.session_state.coords_cache_gmaps[cache_key] = (lat, lng, formatted_addr, exito)
         
-        lat, lng, exito = st.session_state.coords_cache[cache_key]
+        lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
         
         if not exito:
-            no_encontradas.append((d_orig, d_actual))
+            no_encontradas.append(d_orig)
 
-    # Excluir descartadas
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
-        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** en {config_actual['provincia']} que no pudieron ser ubicadas de forma automática.")
-        st.markdown("Podés intentar corregir el texto o descartarla para el reparto de hoy:")
-
-        for d_orig, d_actual in no_encontradas:
-            with st.container():
-                c1, c2, c3 = st.columns([3, 1, 1])
-                
-                with c1:
-                    nueva_dir = st.text_input(
-                        label=f"Dirección (Original: '{d_orig}')",
-                        value=d_actual,
-                        key=f"input_{d_orig}"
-                    )
-                
-                with c2:
-                    st.write(" ")
-                    st.write(" ")
-                    if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
-                        st.session_state.direcciones_editadas[d_orig] = nueva_dir
-                        # Limpiar caché previa de esta dirección para forzar nueva búsqueda
-                        for k in list(st.session_state.coords_cache.keys()):
-                            if d_orig in k or d_actual in k:
-                                del st.session_state.coords_cache[k]
-                        st.rerun()
-
-                with c3:
-                    st.write(" ")
-                    st.write(" ")
-                    if st.button("❌ Descartar", key=f"discard_{d_orig}"):
-                        st.session_state.direcciones_descartadas.add(d_orig)
-                        st.rerun()
-                st.divider()
+        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que Google Maps no pudo interpretar con certeza:")
+        for d_orig in no_encontradas:
+            c1, c2 = st.columns([4, 1])
+            c1.write(f"• **{d_orig}**")
+            if c2.button("❌ Descartar", key=f"discard_{d_orig}"):
+                st.session_state.direcciones_descartadas.add(d_orig)
+                st.rerun()
     else:
-        st.success("✅ ¡Todas las direcciones activas fueron ubicadas correctamente en el mapa!")
-
-    if len(st.session_state.direcciones_descartadas) > 0:
-        st.info(f"ℹ️ Se descartaron **{len(st.session_state.direcciones_descartadas)} dirección(es)** para el ruteo de hoy.")
+        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la planilla!")
 
     # Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
@@ -194,16 +156,14 @@ if uploaded_file is not None:
 
         with st.spinner(f"Agrupando locales y calculando rutas óptimas en {config_actual['provincia']}..."):
             
-            # Agrupar por dirección física activa
             grupos_locales = []
             for dir_orig, group in df_filtrado_activo.groupby('direccion_limpia'):
-                dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
-                cache_key = f"{dir_final}_{group[col_cp].iloc[0]}_{config_actual['provincia']}"
+                cache_key = f"{dir_orig}_{config_actual['provincia']}"
                 
-                if cache_key in st.session_state.coords_cache:
-                    lat, lng, _ = st.session_state.coords_cache[cache_key]
+                if cache_key in st.session_state.coords_cache_gmaps:
+                    lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
                 else:
-                    lat, lng = config_actual["depot_coords"]
+                    lat, lng, formatted_addr = config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_orig
 
                 detalles_ordenes = []
                 for _, row in group.iterrows():
@@ -216,7 +176,7 @@ if uploaded_file is not None:
                     })
                 
                 grupos_locales.append({
-                    'direccion': dir_final,
+                    'direccion': formatted_addr,
                     'cliente_principal': group[col_cliente].iloc[0],
                     'lat': lat,
                     'lng': lng,
@@ -240,7 +200,7 @@ if uploaded_file is not None:
                 )
                 df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
 
-            # Asignación de vehículos
+            # Asignación de vehículos (K-Means)
             usar_dos = len(df_locales) >= 6
             depot_lat, depot_lng = config_actual["depot_coords"]
 
@@ -252,7 +212,7 @@ if uploaded_file is not None:
             else:
                 df_locales['Vehículo Asignado'] = 'Vehículo 1'
 
-            # OR-Tools Solver
+            # Solver OR-Tools
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
                 for _, row in df_grupo.iterrows():
@@ -319,7 +279,7 @@ if uploaded_file is not None:
                 sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
                 direcciones_ordenadas = sub_df_ordenado['direccion'].tolist()
-                waypoints_encoded = "|".join([urllib.parse.quote(f"{d}, {config_actual['provincia']}") for d in direcciones_ordenadas])
+                waypoints_encoded = "|".join([urllib.parse.quote(d) for d in direcciones_ordenadas])
                 link_maps = f"https://www.google.com/maps/dir/?api=1&origin={origen_encoded}&destination={origen_encoded}&waypoints={waypoints_encoded}&travelmode=driving"
                 
                 tiempo_est = (km_v / 25.0) + ((len(sub_df_ordenado) * MINUTOS_POR_PARADA) / 60.0)
@@ -369,12 +329,6 @@ if uploaded_file is not None:
                     )
                     
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
-
-            # Marcar descartadas en el Excel final
-            for d_disc in st.session_state.direcciones_descartadas:
-                indices_disc = df[df[col_direccion].apply(limpiar_direccion) == d_disc].index
-                for idx_d in indices_disc:
-                    df.loc[idx_d, 'Estado'] = 'Dirección No Encontrada'
 
             # Botón de Descargar Excel
             st.divider()
