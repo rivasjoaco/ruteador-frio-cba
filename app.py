@@ -84,10 +84,13 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # Limpieza de dirección para quitar ceros a la izquierda de SAP
+# Limpieza de dirección para quitar ceros a la izquierda de SAP y puntos
     def limpiar_direccion(dir_raw):
         dir_str = str(dir_raw).strip()
+        # 1. Quitar ceros a la izquierda en alturas (ej: 02215 -> 2215)
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
+        # 2. Eliminar puntos de abreviaturas como AV. o PZA. para no confundir a la API
+        dir_str = dir_str.replace('.', '')
         return dir_str
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
@@ -95,18 +98,24 @@ if uploaded_file is not None:
 # Geolocalización robusta con Google Maps
     def geocodificar_google(dir_texto, cp_texto):
         prov = config_actual['provincia']
-        # Consulta estructurada limpia para Google
-        query = f"{dir_texto}, {prov}, Argentina"
-        try:
-            # Forzamos la región Argentina
-            geocode_result = gmaps.geocode(query, region='ar')
-            if geocode_result and len(geocode_result) > 0:
-                res = geocode_result[0]
-                location = res['geometry']['location']
-                formatted_address = res.get('formatted_address', query)
-                return location['lat'], location['lng'], formatted_address, True
-        except Exception as e:
-            pass
+        
+        # Intento 1: Dirección limpia + Provincia + Argentina
+        query_1 = f"{dir_texto}, {prov}, Argentina"
+        
+        # Intento 2 (Fallback): Por si incluye piso/dpto u otra palabra extra
+        query_2 = f"{dir_texto}, Argentina"
+        
+        for q in [query_1, query_2]:
+            try:
+                geocode_result = gmaps.geocode(q, region='ar')
+                if geocode_result and len(geocode_result) > 0:
+                    res = geocode_result[0]
+                    location = res['geometry']['location']
+                    formatted_address = res.get('formatted_address', dir_texto)
+                    return location['lat'], location['lng'], formatted_address, True
+            except Exception:
+                pass
+                
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_texto, False
 
     # Memoria en sesión para coordenadas
