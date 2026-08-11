@@ -92,22 +92,28 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # Geolocalización ultra-precisa con Google Maps
+# Geolocalización robusta con Google Maps
     def geocodificar_google(dir_texto, cp_texto):
-        query = f"{dir_texto}, {config_actual['provincia']}, Argentina"
+        prov = config_actual['provincia']
+        # Consulta estructurada limpia para Google
+        query = f"{dir_texto}, {prov}, Argentina"
         try:
-            geocode_result = gmaps.geocode(query)
-            if geocode_result:
-                location = geocode_result[0]['geometry']['location']
-                formatted_address = geocode_result[0]['formatted_address']
+            # Forzamos la región Argentina
+            geocode_result = gmaps.geocode(query, region='ar')
+            if geocode_result and len(geocode_result) > 0:
+                res = geocode_result[0]
+                location = res['geometry']['location']
+                formatted_address = res.get('formatted_address', query)
                 return location['lat'], location['lng'], formatted_address, True
-        except Exception:
+        except Exception as e:
             pass
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_texto, False
 
     # Memoria en sesión para coordenadas
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
+    if "direcciones_editadas" not in st.session_state:
+        st.session_state.direcciones_editadas = {}
     if "direcciones_descartadas" not in st.session_state:
         st.session_state.direcciones_descartadas = set()
 
@@ -124,27 +130,43 @@ if uploaded_file is not None:
         if d_orig in st.session_state.direcciones_descartadas:
             continue
 
-        cache_key = f"{d_orig}_{config_actual['provincia']}"
+        d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
+        cache_key = f"{d_actual}_{config_actual['provincia']}"
 
         if cache_key not in st.session_state.coords_cache_gmaps:
-            lat, lng, formatted_addr, exito = geocodificar_google(d_orig, cp_val)
+            lat, lng, formatted_addr, exito = geocodificar_google(d_actual, cp_val)
             st.session_state.coords_cache_gmaps[cache_key] = (lat, lng, formatted_addr, exito)
         
         lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
         
         if not exito:
-            no_encontradas.append(d_orig)
+            no_encontradas.append((d_orig, d_actual))
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
-        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que Google Maps no pudo interpretar con certeza:")
-        for d_orig in no_encontradas:
-            c1, c2 = st.columns([4, 1])
-            c1.write(f"• **{d_orig}**")
-            if c2.button("❌ Descartar", key=f"discard_{d_orig}"):
-                st.session_state.direcciones_descartadas.add(d_orig)
-                st.rerun()
+        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que requieren revisión manual:")
+        for d_orig, d_actual in no_encontradas:
+            with st.container():
+                c1, c2, c3 = st.columns([3, 1, 1])
+                with c1:
+                    nueva_dir = st.text_input("Dirección:", value=d_actual, key=f"input_{d_orig}")
+                with c2:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
+                        st.session_state.direcciones_editadas[d_orig] = nueva_dir
+                        for k in list(st.session_state.coords_cache_gmaps.keys()):
+                            if d_orig in k or d_actual in k:
+                                del st.session_state.coords_cache_gmaps[k]
+                        st.rerun()
+                with c3:
+                    st.write(" ")
+                    st.write(" ")
+                    if st.button("❌ Descartar", key=f"discard_{d_orig}"):
+                        st.session_state.direcciones_descartadas.add(d_orig)
+                        st.rerun()
+                st.divider()
     else:
         st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la planilla!")
 
