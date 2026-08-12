@@ -236,14 +236,13 @@ if uploaded_file is not None:
         st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la zona seleccionada!")
 
     # ==========================================
-    # NUEVO: PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
+    # PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
     # ==========================================
     st.divider()
     st.markdown("### 🚗 Planificación de Flota")
     
     total_direcciones_unicas = len(df_filtrado_activo['direccion_limpia'].unique())
     
-    # Lógica de sugerencia: 1 auto cada 8 paradas aprox.
     sug_vehiculos = 1
     if total_direcciones_unicas > 8: sug_vehiculos = 2
     if total_direcciones_unicas > 16: sug_vehiculos = 3
@@ -253,14 +252,13 @@ if uploaded_file is not None:
         cant_vehiculos = st.number_input(
             "Seleccioná la cantidad de vehículos para esta ruta:",
             min_value=1,
-            max_value=5,
+            max_value=10,
             value=sug_vehiculos,
             help="El sistema agrupará los locales automáticamente en la cantidad de vehículos que elijas."
         )
     with col_v2:
         st.info(f"💡 **Sugerencia:** Para **{total_direcciones_unicas} ubicaciones**, recomendamos despachar **{sug_vehiculos} vehículo(s)**.")
 
-    # 4. Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
         if df_filtrado_activo.empty:
             st.error("No hay direcciones válidas para procesar el ruteo.")
@@ -286,7 +284,7 @@ if uploaded_file is not None:
                         'tel': str(row[col_telefono]),
                         'activo': str(row[col_activo]),
                         'obs': str(row[col_texto_breve]),
-                        'puesto': str(row[col_puesto]) # Nuevo dato capturado
+                        'puesto': str(row[col_puesto])
                     })
                 
                 grupos_locales.append({
@@ -301,7 +299,6 @@ if uploaded_file is not None:
 
             df_locales = pd.DataFrame(grupos_locales)
 
-            # Asignación de vehículos usando la cantidad seleccionada por el usuario
             depot_lat, depot_lng = config_actual["depot_coords"]
 
             if cant_vehiculos > 1 and len(df_locales) >= cant_vehiculos:
@@ -313,7 +310,6 @@ if uploaded_file is not None:
             else:
                 df_locales['Vehículo Asignado'] = 'Vehículo 1'
 
-            # Solver OR-Tools
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
                 for _, row in df_grupo.iterrows():
@@ -398,12 +394,22 @@ if uploaded_file is not None:
                     for _, local in sub_df_ordenado.iterrows():
                         cant_ord = local['cant_ordenes']
                         
-                        # Armado del encabezado de la parada para WhatsApp
+                        # 1. MOSTRAR EN LA WEB (Ahora sí!)
+                        st.markdown(f"**{paso}. {local['cliente_principal']}**")
+                        st.caption(f"📍 {local['direccion']}")
+                        
+                        # 2. ARMAR EL TEXTO PARA WHATSAPP
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}*%0A"
                         texto_paradas_wa += f"📍 {local['direccion']}%0A"
 
                         for det in local['detalles']:
-                            # Formato limpio y estructurado con todos los datos solicitados
+                            # Mostrar detalle en la web
+                            st.write(
+                                f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}` | "
+                                f"Activo: `{det['activo']}` | Obs: `{det['obs']}`"
+                            )
+                            
+                            # Formato para WhatsApp
                             texto_paradas_wa += (
                                 f"   🔸 *Puesto de trabajo:* {det['puesto']}%0A"
                                 f"   🔸 *N° Orden:* {det['orden']}%0A"
@@ -416,6 +422,7 @@ if uploaded_file is not None:
                                 df.loc[orig_idx, 'Estado'] = 'En Ruta'
                                 df.loc[orig_idx, 'Link de Ruta'] = str(link_maps)
 
+                        st.write("---")
                         paso += 1
 
                     st.link_button("🗺️ Abrir Hoja de Ruta en Google Maps", link_maps)
