@@ -92,7 +92,7 @@ if uploaded_file is not None:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Mapeo de columnas (Agregamos la Columna I para el Puesto de Trabajo)
+    # Mapeo de columnas
     col_orden = df.columns[0]
     col_cliente = df.columns[2]
     col_direccion = df.columns[3]
@@ -368,12 +368,11 @@ if uploaded_file is not None:
             st.info(f"💡 **DESPACHO ZONIFICADO:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
 
             cols = st.columns(len(vehiculos_unicos))
-            origen_encoded = urllib.parse.quote(config_actual["depot_address"])
-
+            
             for idx_col, v_nombre in enumerate(sorted(vehiculos_unicos)):
                 grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
                 
-sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
+                sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
                 direcciones_ordenadas = sub_df_ordenado['direccion'].tolist()
                 
@@ -387,14 +386,14 @@ sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                     bloque = direcciones_ordenadas[i:i+tamano_bloque]
                     
                     if i == 0:
-                        origen_ruta = config_actual["depot_address"] # Sale del depósito
+                        origen_ruta = config_actual["depot_address"]
                     else:
-                        origen_ruta = direcciones_ordenadas[i-1] # Sale del último cliente visitado
+                        origen_ruta = direcciones_ordenadas[i-1]
                         
                     if i + tamano_bloque >= len(direcciones_ordenadas):
-                        destino_ruta = config_actual["depot_address"] # Vuelve al depósito
+                        destino_ruta = config_actual["depot_address"]
                     else:
-                        destino_ruta = bloque[-1] # Termina en el último cliente de este bloque
+                        destino_ruta = bloque[-1]
                         bloque = bloque[:-1]
                         
                     waypoints_str = "|".join([urllib.parse.quote(d) for d in bloque])
@@ -441,15 +440,11 @@ sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                             for orig_idx in local['indices_originales']:
                                 df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
                                 df.loc[orig_idx, 'Estado'] = 'En Ruta'
-                                # Guardamos en Excel el link de la primera ruta por defecto
                                 df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
 
                         st.write("---")
                         paso += 1
 
-                    # ==========================================
-                    # BOTONES Y TEXTOS DIVIDIDOS EN LA WEB
-                    # ==========================================
                     for idx_link, link_ruta in enumerate(rutas_links):
                         nombre_boton = "🗺️ Abrir Hoja de Ruta Completa" if len(rutas_links) == 1 else f"🗺️ Abrir Ruta (Parte {idx_link + 1})"
                         st.link_button(nombre_boton, link_ruta)
