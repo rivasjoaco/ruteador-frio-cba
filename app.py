@@ -127,43 +127,61 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
+    # ==========================================
+    # NUEVO: MAPEO TEMPRANO Y FILTRO DE ZONAS
+    # ==========================================
+    def obtener_localidad(cp_val):
+        cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
+        return DICCIONARIO_CP.get(cp_limpio, f"{config_actual['ciudad']}, {config_actual['provincia']}")
+
+    df_filtrado['Localidad_Mapeada'] = df_filtrado[col_cp].apply(obtener_localidad)
+
+    st.divider()
+    st.markdown("### 🌍 Filtro de Localidades (Zonificación)")
+    
+    localidades_presentes = sorted(df_filtrado['Localidad_Mapeada'].unique())
+    
+    localidades_seleccionadas = st.multiselect(
+        "Seleccioná qué zonas querés planificar en esta tanda de ruteo:",
+        options=localidades_presentes,
+        default=localidades_presentes
+    )
+    
+    if not localidades_seleccionadas:
+        st.info("👆 Seleccioná al menos una zona para continuar con la validación de mapas.")
+        st.stop()
+        
+    # Achicamos el dataframe solo a lo que el usuario seleccionó
+    df_filtrado = df_filtrado[df_filtrado['Localidad_Mapeada'].isin(localidades_seleccionadas)].copy()
+    st.success(f"✅ Vas a procesar **{len(df_filtrado)} órdenes** de las zonas seleccionadas.")
+    # ==========================================
+
     # 1. Función de limpieza de la dirección
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
             return ""
-        # Destruir saltos de línea molestos de SAP (ej: MANUEL \n LUCERO)
+        # Destruir saltos de línea molestos de SAP
         dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
         
-        # Eliminar ceros a la izquierda de los números (ej: 00057 -> 57)
+        # Eliminar ceros a la izquierda
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
         # Reemplazar caracteres problemáticos
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
-        # Eliminar sufijos de SAP que rompen la geolocalización
+        # Eliminar sufijos de SAP
         patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*'
         dir_str = re.sub(patron_basura, '', dir_str)
-        # Limpiar espacios múltiples
+        # Limpiar espacios
         dir_str = re.sub(r'\s+', ' ', dir_str).strip()
         
         return dir_str
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
-    def geocodificar_google(dir_texto, cp_val):
-        # ALERTA FORZADA: Si la dirección no tiene número (S/N), va a revisión manual
+    # 2. Búsqueda combinada usando la zona ya detectada
+    def geocodificar_google(dir_texto, ubicacion_geografica):
         if "S/N" in dir_texto.upper() or "S/ N" in dir_texto.upper():
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], "Falta altura exacta (S/N)", False
-
-        # Limpiar el CP por si Excel lo trae como decimal (ej: 5152.0)
-        cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
         
-        # Obtener Ciudad y Provincia combinadas desde el diccionario
-        ubicacion_geografica = DICCIONARIO_CP.get(
-            cp_limpio, 
-            f"{config_actual['ciudad']}, {config_actual['provincia']}"
-        )
-        
-        # Armado exacto de la cadena de búsqueda
         query_principal = f"{dir_texto}, {ubicacion_geografica}, Argentina"
         
         try:
@@ -193,22 +211,22 @@ if uploaded_file is not None:
         st.session_state.coords_cache_gmaps = {}
         st.rerun()
 
-    direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
+    direcciones_unicas = df_filtrado[['direccion_limpia', 'Localidad_Mapeada']].drop_duplicates()
     no_encontradas = []
 
-    with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
+    with st.spinner("Consultando a Google Maps..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
-            cp_val = row_dir[col_cp]
+            loc_map = row_dir['Localidad_Mapeada']
             
             if d_orig in st.session_state.direcciones_descartadas:
                 continue
 
             d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
-            cache_key = f"{d_actual}_{cp_val}_{config_actual['provincia']}"
+            cache_key = f"{d_actual}_{loc_map}"
 
             if cache_key not in st.session_state.coords_cache_gmaps:
-                lat, lng, formatted_addr, exito = geocodificar_google(d_actual, cp_val)
+                lat, lng, formatted_addr, exito = geocodificar_google(d_actual, loc_map)
                 st.session_state.coords_cache_gmaps[cache_key] = (lat, lng, formatted_addr, exito)
             
             lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
@@ -245,7 +263,7 @@ if uploaded_file is not None:
                         st.rerun()
                 st.divider()
     else:
-        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones usando los Códigos Postales!")
+        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la zona seleccionada!")
 
     # 4. Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
@@ -253,13 +271,12 @@ if uploaded_file is not None:
             st.error("No hay direcciones válidas para procesar el ruteo.")
             st.stop()
 
-        with st.spinner(f"Agrupando locales y calculando rutas óptimas en {config_actual['provincia']}..."):
+        with st.spinner("Agrupando locales y calculando rutas óptimas..."):
             
             grupos_locales = []
-            for dir_orig, group in df_filtrado_activo.groupby('direccion_limpia'):
+            for (dir_orig, loc_map), group in df_filtrado_activo.groupby(['direccion_limpia', 'Localidad_Mapeada']):
                 dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
-                cp_val = group[col_cp].iloc[0]
-                cache_key = f"{dir_final}_{cp_val}_{config_actual['provincia']}"
+                cache_key = f"{dir_final}_{loc_map}"
                 
                 if cache_key in st.session_state.coords_cache_gmaps:
                     lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
@@ -296,8 +313,8 @@ if uploaded_file is not None:
             if total_locales_unicos > CAPACIDAD_TOTAL_FLOTA:
                 st.info(
                     f"💡 **AVISO DE CAPACIDAD DE FLOTA:**\n\n"
-                    f"Ingresaron **{len(df_filtrado_activo)} órdenes válidas** repartidas en **{total_locales_unicos} direcciones únicas**.\n\n"
-                    f"Saliendo con **2 vehículos**, se cubrirán las primeras **{CAPACIDAD_TOTAL_FLOTA} ubicaciones prioritarias** de hoy."
+                    f"Para las zonas seleccionadas ingresaron **{len(df_filtrado_activo)} órdenes válidas** en **{total_locales_unicos} direcciones únicas**.\n\n"
+                    f"Saliendo con **2 vehículos**, se cubrirán las primeras **{CAPACIDAD_TOTAL_FLOTA} ubicaciones prioritarias**."
                 )
                 df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
 
@@ -369,7 +386,7 @@ if uploaded_file is not None:
             vehiculos_unicos = df_locales['Vehículo Asignado'].unique()
 
             st.divider()
-            st.info(f"💡 **DESPACHO REGIONAL ({config_actual['provincia'].upper()}):** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
+            st.info(f"💡 **DESPACHO ZONIFICADO:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
 
             cols = st.columns(len(vehiculos_unicos))
             origen_encoded = urllib.parse.quote(config_actual["depot_address"])
@@ -419,7 +436,7 @@ if uploaded_file is not None:
                     st.link_button("🗺️ Abrir Hoja de Ruta en Google Maps", link_maps)
                     
                     msg_wa = (
-                        f"🚚 *HOJA DE RUTA - {v_nombre.upper()} ({config_actual['provincia'].upper()})*%0A"
+                        f"🚚 *HOJA DE RUTA - {v_nombre.upper()}*%0A"
                         f"📍 *Punto de Salida/Retorno:* {config_actual['depot_address']}%0A"
                         f"📊 *Ubicaciones a Visitar:* {len(sub_df_ordenado)} puntos%0A"
                         f"----------------------------------------%0A"
