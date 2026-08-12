@@ -21,22 +21,41 @@ CENTROS_CONFIG = {
         "depot_address": "Depósito San Isidro EDASA Coca Cola X5016 Córdoba, Argentina",
         "depot_coords": (-31.442, -64.148),
         "provincia": "Córdoba",
-        "ciudad": "Córdoba"
+        "ciudad": "Córdoba Capital"
     },
     "Mendoza (Centro 0962)": {
         "codigos": ["0962", "962"],
         "depot_address": "Alsina 2336, M5501 Godoy Cruz, Mendoza, Argentina",
         "depot_coords": (-32.923, -68.835),
         "provincia": "Mendoza",
-        "ciudad": "Mendoza"
+        "ciudad": "Mendoza Capital"
     }
 }
+
+# ==========================================
+# DICCIONARIO MAESTRO DE CÓDIGOS POSTALES
+# Podés agregar todos los que quieras acá abajo:
+# ==========================================
+DICCIONARIO_CP = {
+    "5000": "Córdoba Capital",
+    "5008": "Córdoba Capital",
+    "5009": "Córdoba Capital",
+    "5016": "Córdoba Capital",
+    "5152": "Villa Carlos Paz",
+    "5105": "Villa Allende",
+    "5143": "Malagueño",
+    "5500": "Mendoza Capital",
+    "5501": "Godoy Cruz",
+    "5519": "Guaymallén",
+    "5507": "Luján de Cuyo"
+}
+# ==========================================
 
 MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
 
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
-st.subheader("Ruteador Multirregión (Geolocalización Google Maps)")
+st.subheader("Ruteador Multirregión (Geolocalización Inteligente)")
 
 # Configuración API Key
 st.sidebar.header("⚙️ Configuración")
@@ -86,15 +105,15 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # 1. Función de limpieza ultra-robusta de la dirección
+    # 1. Función de limpieza de la dirección
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
             return ""
         dir_str = str(dir_raw).strip().upper()
         
-        # Eliminar ceros a la izquierda (ej: 02215 -> 2215)
+        # Eliminar ceros a la izquierda
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
-        # Reemplazar caracteres problemáticos por espacios
+        # Reemplazar caracteres problemáticos
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
         # Eliminar sufijos de SAP que rompen la geolocalización
         patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL)\b.*'
@@ -106,26 +125,22 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # 2. Búsqueda priorizando el Código Postal (TU LÓGICA)
-    def geocodificar_google(dir_texto, cp_texto):
+    # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
+    def geocodificar_google(dir_texto, cp_val):
         prov = config_actual['provincia']
-        ciudad = config_actual['ciudad']
         
-        # Limpiar el CP por si Excel lo trae como decimal (ej: 5000.0)
-        cp_limpio = str(cp_texto).replace('.0', '').strip() if pd.notna(cp_texto) else ""
+        # Limpiar el CP por si Excel lo trae como decimal (ej: 5152.0)
+        cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
         
-        queries = []
+        # TRUCO MAESTRO: Buscar la ciudad real en nuestro diccionario
+        # Si el CP no está en la lista, usamos la ciudad por defecto de la provincia
+        ciudad_mapeada = DICCIONARIO_CP.get(cp_limpio, config_actual['ciudad'])
         
-        # Prioridad 1: Anclado al Código Postal (Lo más exacto)
-        if cp_limpio and cp_limpio.lower() != "nan":
-            queries.append(f"{dir_texto}, {cp_limpio}, Argentina")
-            queries.append(f"{dir_texto}, CP {cp_limpio}, {prov}, Argentina")
-            
-        # Prioridad 2: Respaldo por Ciudad / Provincia
-        queries.append(f"{dir_texto}, {ciudad}, {prov}, Argentina")
-        queries.append(f"{dir_texto}, {prov}, Argentina")
+        # Armado de la súper consulta exacta
+        query_principal = f"{dir_texto}, {ciudad_mapeada}, {prov}, Argentina"
+        query_respaldo = f"{dir_texto}, {prov}, Argentina"
         
-        for q in queries:
+        for q in [query_principal, query_respaldo]:
             try:
                 res = gmaps.geocode(q, region='ar', components={"country": "AR"})
                 if res and len(res) > 0:
@@ -137,7 +152,7 @@ if uploaded_file is not None:
                 
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_texto, False
 
-    # 3. Inicializar y gestionar Memoria/Caché
+    # 3. Gestión de Memoria/Caché
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
     if "direcciones_editadas" not in st.session_state:
@@ -149,7 +164,6 @@ if uploaded_file is not None:
     c_tit, c_btn = st.columns([3, 1])
     c_tit.markdown("### 🔍 Validación con Google Maps")
     
-    # Botón crucial para resetear errores atrapados en memoria
     if c_btn.button("🧹 Limpiar Memoria y Reintentar"):
         st.session_state.coords_cache_gmaps = {}
         st.rerun()
@@ -157,7 +171,7 @@ if uploaded_file is not None:
     direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
     no_encontradas = []
 
-    with st.spinner("Consultando ubicaciones por Código Postal y Dirección..."):
+    with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             cp_val = row_dir[col_cp]
@@ -191,6 +205,7 @@ if uploaded_file is not None:
                     st.write(" ")
                     if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
                         st.session_state.direcciones_editadas[d_orig] = nueva_dir
+                        # Limpiar solo esta entrada de la memoria
                         for k in list(st.session_state.coords_cache_gmaps.keys()):
                             if d_orig in k or d_actual in k:
                                 del st.session_state.coords_cache_gmaps[k]
@@ -259,7 +274,7 @@ if uploaded_file is not None:
                 )
                 df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
 
-            # Asignación de vehículos (K-Means)
+            # Asignación de vehículos
             usar_dos = len(df_locales) >= 6
             depot_lat, depot_lng = config_actual["depot_coords"]
 
