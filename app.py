@@ -196,7 +196,7 @@ if uploaded_file is not None:
     direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
     no_encontradas = []
 
-    with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
+   with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             cp_val = row_dir[col_cp]
@@ -214,14 +214,20 @@ if uploaded_file is not None:
             lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
             
             if not exito:
-                no_encontradas.append((d_orig, d_actual))
+                # ACÁ AHORA GUARDAMOS TAMBIÉN EL MENSAJE DE ERROR (formatted_addr)
+                no_encontradas.append((d_orig, d_actual, formatted_addr))
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
         st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que requieren revisión manual:")
-        for d_orig, d_actual in no_encontradas:
+        
+        # ACÁ EXTRAEMOS EL MENSAJE DE ERROR
+        for d_orig, d_actual, error_msg in no_encontradas:
             with st.container():
+                # ACÁ LO MOSTRAMOS EN PANTALLA EN LETRA CHICA
+                st.caption(f"🛑 **Respuesta de Google:** {error_msg}")
+                
                 c1, c2, c3 = st.columns([3, 1, 1])
                 with c1:
                     nueva_dir = st.text_input("Dirección:", value=d_actual, key=f"input_{d_orig}")
@@ -230,7 +236,6 @@ if uploaded_file is not None:
                     st.write(" ")
                     if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
                         st.session_state.direcciones_editadas[d_orig] = nueva_dir
-                        # Limpiar solo esta entrada de la memoria
                         for k in list(st.session_state.coords_cache_gmaps.keys()):
                             if d_orig in k or d_actual in k:
                                 del st.session_state.coords_cache_gmaps[k]
