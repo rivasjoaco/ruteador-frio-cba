@@ -148,7 +148,7 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-   # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
+    # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
     def geocodificar_google(dir_texto, cp_val):
         # ALERTA FORZADA: Si la dirección no tiene número (S/N), va a revisión manual
         if "S/N" in dir_texto.upper() or "S/ N" in dir_texto.upper():
@@ -176,7 +176,7 @@ if uploaded_file is not None:
                 return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"Google no ubicó: {query_principal}", False
         except Exception as e:
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API: {str(e)}", False
-            
+
     # 3. Gestión de Memoria/Caché
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
@@ -196,7 +196,7 @@ if uploaded_file is not None:
     direcciones_unicas = df_filtrado[['direccion_limpia', col_cp]].drop_duplicates()
     no_encontradas = []
 
-   with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
+    with st.spinner("Cruzando Códigos Postales y geolocalizando..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             cp_val = row_dir[col_cp]
@@ -214,7 +214,6 @@ if uploaded_file is not None:
             lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
             
             if not exito:
-                # ACÁ AHORA GUARDAMOS TAMBIÉN EL MENSAJE DE ERROR (formatted_addr)
                 no_encontradas.append((d_orig, d_actual, formatted_addr))
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
@@ -222,10 +221,8 @@ if uploaded_file is not None:
     if no_encontradas:
         st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que requieren revisión manual:")
         
-        # ACÁ EXTRAEMOS EL MENSAJE DE ERROR
         for d_orig, d_actual, error_msg in no_encontradas:
             with st.container():
-                # ACÁ LO MOSTRAMOS EN PANTALLA EN LETRA CHICA
                 st.caption(f"🛑 **Respuesta de Google:** {error_msg}")
                 
                 c1, c2, c3 = st.columns([3, 1, 1])
