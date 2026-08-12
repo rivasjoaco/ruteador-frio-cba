@@ -373,11 +373,36 @@ if uploaded_file is not None:
             for idx_col, v_nombre in enumerate(sorted(vehiculos_unicos)):
                 grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
                 
-                sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
+sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
                 direcciones_ordenadas = sub_df_ordenado['direccion'].tolist()
-                waypoints_encoded = "|".join([urllib.parse.quote(d) for d in direcciones_ordenadas])
-                link_maps = f"https://www.google.com/maps/dir/?api=1&origin={origen_encoded}&destination={origen_encoded}&waypoints={waypoints_encoded}&travelmode=driving"
+                
+                # ==========================================
+                # NUEVO: DIVISOR AUTOMÁTICO DE RUTAS (>9 PARADAS)
+                # ==========================================
+                rutas_links = []
+                tamano_bloque = 9 # Límite de waypoints en Google Maps
+                
+                for i in range(0, len(direcciones_ordenadas), tamano_bloque):
+                    bloque = direcciones_ordenadas[i:i+tamano_bloque]
+                    
+                    if i == 0:
+                        origen_ruta = config_actual["depot_address"] # Sale del depósito
+                    else:
+                        origen_ruta = direcciones_ordenadas[i-1] # Sale del último cliente visitado
+                        
+                    if i + tamano_bloque >= len(direcciones_ordenadas):
+                        destino_ruta = config_actual["depot_address"] # Vuelve al depósito
+                    else:
+                        destino_ruta = bloque[-1] # Termina en el último cliente de este bloque
+                        bloque = bloque[:-1]
+                        
+                    waypoints_str = "|".join([urllib.parse.quote(d) for d in bloque])
+                    origen_enc = urllib.parse.quote(origen_ruta)
+                    destino_enc = urllib.parse.quote(destino_ruta)
+                    
+                    link = f"https://www.google.com/maps/dir/?api=1&origin={origen_enc}&destination={destino_enc}&waypoints={waypoints_str}&travelmode=driving"
+                    rutas_links.append(link)
                 
                 tiempo_est = (km_v / 25.0) + ((len(sub_df_ordenado) * MINUTOS_POR_PARADA) / 60.0)
 
@@ -394,22 +419,18 @@ if uploaded_file is not None:
                     for _, local in sub_df_ordenado.iterrows():
                         cant_ord = local['cant_ordenes']
                         
-                        # 1. MOSTRAR EN LA WEB (Ahora sí!)
                         st.markdown(f"**{paso}. {local['cliente_principal']}**")
                         st.caption(f"📍 {local['direccion']}")
                         
-                        # 2. ARMAR EL TEXTO PARA WHATSAPP
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}*%0A"
                         texto_paradas_wa += f"📍 {local['direccion']}%0A"
 
                         for det in local['detalles']:
-                            # Mostrar detalle en la web
                             st.write(
                                 f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}` | "
                                 f"Activo: `{det['activo']}` | Obs: `{det['obs']}`"
                             )
                             
-                            # Formato para WhatsApp
                             texto_paradas_wa += (
                                 f"   🔸 *Puesto de trabajo:* {det['puesto']}%0A"
                                 f"   🔸 *N° Orden:* {det['orden']}%0A"
@@ -420,14 +441,27 @@ if uploaded_file is not None:
                             for orig_idx in local['indices_originales']:
                                 df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
                                 df.loc[orig_idx, 'Estado'] = 'En Ruta'
-                                df.loc[orig_idx, 'Link de Ruta'] = str(link_maps)
+                                # Guardamos en Excel el link de la primera ruta por defecto
+                                df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
 
                         st.write("---")
                         paso += 1
 
-                    st.link_button("🗺️ Abrir Hoja de Ruta en Google Maps", link_maps)
+                    # ==========================================
+                    # BOTONES Y TEXTOS DIVIDIDOS EN LA WEB
+                    # ==========================================
+                    for idx_link, link_ruta in enumerate(rutas_links):
+                        nombre_boton = "🗺️ Abrir Hoja de Ruta Completa" if len(rutas_links) == 1 else f"🗺️ Abrir Ruta (Parte {idx_link + 1})"
+                        st.link_button(nombre_boton, link_ruta)
                     
-                    # Mensaje final de WhatsApp unificado
+                    texto_links_wa = ""
+                    if len(rutas_links) == 1:
+                        texto_links_wa = f"🔗 *Link de Ruta Google Maps:*%0A{urllib.parse.quote(rutas_links[0])}"
+                    else:
+                        texto_links_wa = "🔗 *Links de Ruta (Dividida por límite de Google Maps):*%0A"
+                        for idx_link, link_ruta in enumerate(rutas_links):
+                            texto_links_wa += f"📍 *Parte {idx_link + 1}:*%0A{urllib.parse.quote(link_ruta)}%0A%0A"
+                    
                     msg_wa = (
                         f"🚚 *HOJA DE RUTA - {v_nombre.upper()}*%0A"
                         f"📊 *Ubicaciones a Visitar:* {len(sub_df_ordenado)} puntos%0A"
@@ -435,7 +469,7 @@ if uploaded_file is not None:
                         f"📋 *DETALLE DE PUNTOS Y ACTIVOS:*%0A"
                         f"{texto_paradas_wa}"
                         f"----------------------------------------%0A"
-                        f"🔗 *Link de Ruta Google Maps:*%0A{urllib.parse.quote(link_maps)}"
+                        f"{texto_links_wa}"
                     )
                     
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
