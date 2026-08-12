@@ -128,30 +128,22 @@ if uploaded_file is not None:
     # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
     def geocodificar_google(dir_texto, cp_val):
         prov = config_actual['provincia']
-        
-        # Limpiar el CP por si Excel lo trae como decimal (ej: 5152.0)
         cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
-        
-        # TRUCO MAESTRO: Buscar la ciudad real en nuestro diccionario
-        # Si el CP no está en la lista, usamos la ciudad por defecto de la provincia
         ciudad_mapeada = DICCIONARIO_CP.get(cp_limpio, config_actual['ciudad'])
         
-        # Armado de la súper consulta exacta
         query_principal = f"{dir_texto}, {ciudad_mapeada}, {prov}, Argentina"
-        query_respaldo = f"{dir_texto}, {prov}, Argentina"
         
-        for q in [query_principal, query_respaldo]:
-            try:
-                res = gmaps.geocode(q, region='ar', components={"country": "AR"})
-                if res and len(res) > 0:
-                    location = res[0]['geometry']['location']
-                    formatted_address = res[0].get('formatted_address', dir_texto)
-                    return location['lat'], location['lng'], formatted_address, True
-            except Exception:
-                continue
-                
-        return config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_texto, False
-
+        try:
+            res = gmaps.geocode(query_principal, region='ar', components={"country": "AR"})
+            if res and len(res) > 0:
+                location = res[0]['geometry']['location']
+                formatted_address = res[0].get('formatted_address', dir_texto)
+                return location['lat'], location['lng'], formatted_address, True
+            else:
+                return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"Google devolvió 0 resultados", False
+        except Exception as e:
+            # ACÁ ATRAPAMOS EL ERROR REAL DE GOOGLE
+            return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API: {str(e)}", False
     # 3. Gestión de Memoria/Caché
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
