@@ -34,20 +34,42 @@ CENTROS_CONFIG = {
 
 # ==========================================
 # DICCIONARIO MAESTRO DE CÓDIGOS POSTALES
-# Podés agregar todos los que quieras acá abajo:
+# Formato: "CP": "Ciudad, Provincia"
 # ==========================================
 DICCIONARIO_CP = {
-    "5000": "Córdoba Capital",
-    "5008": "Córdoba Capital",
-    "5009": "Córdoba Capital",
-    "5016": "Córdoba Capital",
-    "5152": "Villa Carlos Paz",
-    "5105": "Villa Allende",
-    "5143": "Malagueño",
-    "5500": "Mendoza Capital",
-    "5501": "Godoy Cruz",
-    "5519": "Guaymallén",
-    "5507": "Luján de Cuyo"
+    # Capital y Gran Córdoba
+    "5000": "Córdoba Capital, Córdoba",
+    "5003": "Córdoba Capital, Córdoba",
+    "5008": "Córdoba Capital, Córdoba",
+    "5009": "Córdoba Capital, Córdoba",
+    "5010": "Córdoba Capital, Córdoba",
+    "5012": "Córdoba Capital, Córdoba",
+    "5014": "Córdoba Capital, Córdoba",
+    "5016": "Córdoba Capital, Córdoba",
+    "5105": "Villa Allende, Córdoba",
+    "5143": "Malagueño, Córdoba",
+    "5151": "La Calera, Córdoba",
+    "5152": "Villa Carlos Paz, Córdoba",
+    
+    # Interior de Córdoba
+    "5123": "Alta Gracia, Córdoba",
+    "5186": "Alta Gracia, Córdoba",
+    "5194": "Villa General Belgrano, Córdoba",
+    "5800": "Río Cuarto, Córdoba",
+    "5870": "Villa Dolores, Córdoba",
+    "5891": "Mina Clavero, Córdoba",
+    "5960": "Río Segundo, Córdoba",
+    "5986": "Oncativo, Córdoba",
+    
+    # San Juan
+    "5400": "San Juan Capital, San Juan",
+    "5425": "Santa Lucía, San Juan",
+    
+    # Mendoza
+    "5500": "Mendoza Capital, Mendoza",
+    "5501": "Godoy Cruz, Mendoza",
+    "5519": "Guaymallén, Mendoza",
+    "5507": "Luján de Cuyo, Mendoza"
 }
 # ==========================================
 
@@ -109,14 +131,15 @@ if uploaded_file is not None:
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
             return ""
-        dir_str = str(dir_raw).strip().upper()
+        # Destruir saltos de línea molestos de SAP (ej: MANUEL \n LUCERO)
+        dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
         
-        # Eliminar ceros a la izquierda
+        # Eliminar ceros a la izquierda de los números (ej: 00057 -> 57)
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
         # Reemplazar caracteres problemáticos
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
         # Eliminar sufijos de SAP que rompen la geolocalización
-        patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL)\b.*'
+        patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*'
         dir_str = re.sub(patron_basura, '', dir_str)
         # Limpiar espacios múltiples
         dir_str = re.sub(r'\s+', ' ', dir_str).strip()
@@ -125,13 +148,23 @@ if uploaded_file is not None:
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
+   # 2. Búsqueda combinada: Dirección Limpia + Ciudad del CP
     def geocodificar_google(dir_texto, cp_val):
-        prov = config_actual['provincia']
+        # ALERTA FORZADA: Si la dirección no tiene número (S/N), va a revisión manual
+        if "S/N" in dir_texto.upper() or "S/ N" in dir_texto.upper():
+            return config_actual["depot_coords"][0], config_actual["depot_coords"][1], "Falta altura exacta (S/N)", False
+
+        # Limpiar el CP por si Excel lo trae como decimal (ej: 5152.0)
         cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
-        ciudad_mapeada = DICCIONARIO_CP.get(cp_limpio, config_actual['ciudad'])
         
-        query_principal = f"{dir_texto}, {ciudad_mapeada}, {prov}, Argentina"
+        # Obtener Ciudad y Provincia combinadas desde el diccionario
+        ubicacion_geografica = DICCIONARIO_CP.get(
+            cp_limpio, 
+            f"{config_actual['ciudad']}, {config_actual['provincia']}"
+        )
+        
+        # Armado exacto de la cadena de búsqueda
+        query_principal = f"{dir_texto}, {ubicacion_geografica}, Argentina"
         
         try:
             res = gmaps.geocode(query_principal, region='ar', components={"country": "AR"})
@@ -140,10 +173,10 @@ if uploaded_file is not None:
                 formatted_address = res[0].get('formatted_address', dir_texto)
                 return location['lat'], location['lng'], formatted_address, True
             else:
-                return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"Google devolvió 0 resultados", False
+                return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"Google no ubicó: {query_principal}", False
         except Exception as e:
-            # ACÁ ATRAPAMOS EL ERROR REAL DE GOOGLE
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API: {str(e)}", False
+            
     # 3. Gestión de Memoria/Caché
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
