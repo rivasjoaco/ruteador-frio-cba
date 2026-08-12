@@ -29,6 +29,34 @@ CENTROS_CONFIG = {
         "depot_coords": (-32.923, -68.835),
         "provincia": "Mendoza",
         "ciudad": "Mendoza Capital"
+    },
+    "Litoral (Centro 0961)": {
+        "codigos": ["0961", "961"],
+        "depot_address": "Depósito Base Litoral, Rosario, Santa Fe, Argentina",
+        "depot_coords": (-32.9468, -60.6393), 
+        "provincia": "Santa Fe",
+        "ciudad": "Rosario"
+    },
+    "Sur (Centro 0A16)": {
+        "codigos": ["0A16", "A16", "0a16", "a16"], # Agregamos minúsculas por si SAP lo exporta distinto
+        "depot_address": "Depósito Base Sur, Bahía Blanca, Buenos Aires, Argentina",
+        "depot_coords": (-38.7183, -62.2663), 
+        "provincia": "Buenos Aires",
+        "ciudad": "Bahía Blanca"
+    },
+    "Cuyo Sur (Centro 0A22)": {
+        "codigos": ["0A22", "A22", "0a22", "a22"],
+        "depot_address": "Depósito Base Cuyo Sur, San Juan Capital, San Juan, Argentina",
+        "depot_coords": (-31.5375, -68.5363), 
+        "provincia": "San Juan",
+        "ciudad": "San Juan Capital"
+    },
+    "Patagonia (Centro 0A36)": {
+        "codigos": ["0A36", "A36", "0a36", "a36"],
+        "depot_address": "Depósito Base Patagonia, Trelew, Chubut, Argentina",
+        "depot_coords": (-43.2489, -65.3050), 
+        "provincia": "Chubut",
+        "ciudad": "Trelew"
     }
 }
 
