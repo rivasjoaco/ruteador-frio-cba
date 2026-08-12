@@ -32,12 +32,8 @@ CENTROS_CONFIG = {
     }
 }
 
-# ==========================================
 # DICCIONARIO MAESTRO DE CÓDIGOS POSTALES
-# Formato: "CP": "Ciudad, Provincia"
-# ==========================================
 DICCIONARIO_CP = {
-    # Capital y Gran Córdoba
     "5000": "Córdoba Capital, Córdoba",
     "5003": "Córdoba Capital, Córdoba",
     "5008": "Córdoba Capital, Córdoba",
@@ -50,8 +46,6 @@ DICCIONARIO_CP = {
     "5143": "Malagueño, Córdoba",
     "5151": "La Calera, Córdoba",
     "5152": "Villa Carlos Paz, Córdoba",
-    
-    # Interior de Córdoba
     "5123": "Alta Gracia, Córdoba",
     "5186": "Alta Gracia, Córdoba",
     "5194": "Villa General Belgrano, Córdoba",
@@ -60,18 +54,13 @@ DICCIONARIO_CP = {
     "5891": "Mina Clavero, Córdoba",
     "5960": "Río Segundo, Córdoba",
     "5986": "Oncativo, Córdoba",
-    
-    # San Juan
     "5400": "San Juan Capital, San Juan",
     "5425": "Santa Lucía, San Juan",
-    
-    # Mendoza
     "5500": "Mendoza Capital, Mendoza",
     "5501": "Godoy Cruz, Mendoza",
     "5519": "Guaymallén, Mendoza",
     "5507": "Luján de Cuyo, Mendoza"
 }
-# ==========================================
 
 MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
@@ -79,7 +68,6 @@ MAX_HORAS_JORNADA = 7.5
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
 st.subheader("Ruteador Multirregión (Geolocalización Inteligente)")
 
-# Configuración API Key
 st.sidebar.header("⚙️ Configuración")
 google_api_key = st.sidebar.text_input("Ingrese Google Maps API Key:", type="password")
 
@@ -87,7 +75,6 @@ if not google_api_key:
     st.info("👈 **Para comenzar, ingresá tu Google Maps API Key en el menú lateral izquierdo.**")
     st.stop()
 
-# Inicializar cliente de Google Maps
 try:
     gmaps = googlemaps.Client(key=google_api_key)
 except Exception as e:
@@ -105,13 +92,14 @@ if uploaded_file is not None:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Mapeo de columnas
+    # Mapeo de columnas (Agregamos la Columna I para el Puesto de Trabajo)
     col_orden = df.columns[0]
     col_cliente = df.columns[2]
     col_direccion = df.columns[3]
     col_telefono = df.columns[5]
     col_cp = df.columns[6]
     col_texto_breve = df.columns[7]
+    col_puesto = df.columns[8]      # Col I: Puesto de trabajo
     col_activo = df.columns[9]
     col_centro = df.columns[10]
 
@@ -127,9 +115,6 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
-    # ==========================================
-    # NUEVO: MAPEO TEMPRANO Y FILTRO DE ZONAS
-    # ==========================================
     def obtener_localidad(cp_val):
         cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
         return DICCIONARIO_CP.get(cp_limpio, f"{config_actual['ciudad']}, {config_actual['provincia']}")
@@ -151,33 +136,21 @@ if uploaded_file is not None:
         st.info("👆 Seleccioná al menos una zona para continuar con la validación de mapas.")
         st.stop()
         
-    # Achicamos el dataframe solo a lo que el usuario seleccionó
     df_filtrado = df_filtrado[df_filtrado['Localidad_Mapeada'].isin(localidades_seleccionadas)].copy()
-    st.success(f"✅ Vas a procesar **{len(df_filtrado)} órdenes** de las zonas seleccionadas.")
-    # ==========================================
-
-    # 1. Función de limpieza de la dirección
+    
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
             return ""
-        # Destruir saltos de línea molestos de SAP
         dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
-        
-        # Eliminar ceros a la izquierda
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
-        # Reemplazar caracteres problemáticos
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
-        # Eliminar sufijos de SAP
         patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*'
         dir_str = re.sub(patron_basura, '', dir_str)
-        # Limpiar espacios
         dir_str = re.sub(r'\s+', ' ', dir_str).strip()
-        
         return dir_str
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
-    # 2. Búsqueda combinada usando la zona ya detectada
     def geocodificar_google(dir_texto, ubicacion_geografica):
         if "S/N" in dir_texto.upper() or "S/ N" in dir_texto.upper():
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], "Falta altura exacta (S/N)", False
@@ -195,7 +168,6 @@ if uploaded_file is not None:
         except Exception as e:
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API: {str(e)}", False
 
-    # 3. Gestión de Memoria/Caché
     if "coords_cache_gmaps" not in st.session_state:
         st.session_state.coords_cache_gmaps = {}
     if "direcciones_editadas" not in st.session_state:
@@ -238,11 +210,9 @@ if uploaded_file is not None:
 
     if no_encontradas:
         st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que requieren revisión manual:")
-        
         for d_orig, d_actual, error_msg in no_encontradas:
             with st.container():
                 st.caption(f"🛑 **Respuesta de Google:** {error_msg}")
-                
                 c1, c2, c3 = st.columns([3, 1, 1])
                 with c1:
                     nueva_dir = st.text_input("Dirección:", value=d_actual, key=f"input_{d_orig}")
@@ -264,6 +234,31 @@ if uploaded_file is not None:
                 st.divider()
     else:
         st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la zona seleccionada!")
+
+    # ==========================================
+    # NUEVO: PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
+    # ==========================================
+    st.divider()
+    st.markdown("### 🚗 Planificación de Flota")
+    
+    total_direcciones_unicas = len(df_filtrado_activo['direccion_limpia'].unique())
+    
+    # Lógica de sugerencia: 1 auto cada 8 paradas aprox.
+    sug_vehiculos = 1
+    if total_direcciones_unicas > 8: sug_vehiculos = 2
+    if total_direcciones_unicas > 16: sug_vehiculos = 3
+    
+    col_v1, col_v2 = st.columns([2, 2])
+    with col_v1:
+        cant_vehiculos = st.number_input(
+            "Seleccioná la cantidad de vehículos para esta ruta:",
+            min_value=1,
+            max_value=5,
+            value=sug_vehiculos,
+            help="El sistema agrupará los locales automáticamente en la cantidad de vehículos que elijas."
+        )
+    with col_v2:
+        st.info(f"💡 **Sugerencia:** Para **{total_direcciones_unicas} ubicaciones**, recomendamos despachar **{sug_vehiculos} vehículo(s)**.")
 
     # 4. Botón principal de Ruteo
     if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
@@ -290,7 +285,8 @@ if uploaded_file is not None:
                         'cliente': str(row[col_cliente]),
                         'tel': str(row[col_telefono]),
                         'activo': str(row[col_activo]),
-                        'obs': str(row[col_texto_breve])
+                        'obs': str(row[col_texto_breve]),
+                        'puesto': str(row[col_puesto]) # Nuevo dato capturado
                     })
                 
                 grupos_locales.append({
@@ -304,29 +300,16 @@ if uploaded_file is not None:
                 })
 
             df_locales = pd.DataFrame(grupos_locales)
-            total_locales_unicos = len(df_locales)
 
-            # Capacidad de Flota
-            PARADAS_MAX_POR_VEHICULO = 8
-            CAPACIDAD_TOTAL_FLOTA = PARADAS_MAX_POR_VEHICULO * 2
-
-            if total_locales_unicos > CAPACIDAD_TOTAL_FLOTA:
-                st.info(
-                    f"💡 **AVISO DE CAPACIDAD DE FLOTA:**\n\n"
-                    f"Para las zonas seleccionadas ingresaron **{len(df_filtrado_activo)} órdenes válidas** en **{total_locales_unicos} direcciones únicas**.\n\n"
-                    f"Saliendo con **2 vehículos**, se cubrirán las primeras **{CAPACIDAD_TOTAL_FLOTA} ubicaciones prioritarias**."
-                )
-                df_locales = df_locales.iloc[:CAPACIDAD_TOTAL_FLOTA].copy()
-
-            # Asignación de vehículos
-            usar_dos = len(df_locales) >= 6
+            # Asignación de vehículos usando la cantidad seleccionada por el usuario
             depot_lat, depot_lng = config_actual["depot_coords"]
 
-            if usar_dos:
+            if cant_vehiculos > 1 and len(df_locales) >= cant_vehiculos:
                 coords_matrix = df_locales[['lat', 'lng']].values
-                kmeans = KMeans(n_clusters=2, random_state=42, n_init=10).fit(coords_matrix)
+                kmeans = KMeans(n_clusters=cant_vehiculos, random_state=42, n_init=10).fit(coords_matrix)
                 df_locales['cluster'] = kmeans.labels_
-                df_locales['Vehículo Asignado'] = df_locales['cluster'].map({0: 'Vehículo 1 (Zona A)', 1: 'Vehículo 2 (Zona B)'})
+                vehiculo_map = {i: f'Vehículo {i+1}' for i in range(cant_vehiculos)}
+                df_locales['Vehículo Asignado'] = df_locales['cluster'].map(vehiculo_map)
             else:
                 df_locales['Vehículo Asignado'] = 'Vehículo 1'
 
@@ -414,16 +397,18 @@ if uploaded_file is not None:
                     
                     for _, local in sub_df_ordenado.iterrows():
                         cant_ord = local['cant_ordenes']
-                        st.write(f"**{paso}.** **{local['cliente_principal']}** - {local['direccion']} *(Órdenes: {cant_ord})*")
                         
-                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']} - {local['direccion']}*%0A"
-                        if cant_ord > 1:
-                            texto_paradas_wa += f"   ⚠️ *Este local tiene {cant_ord} órdenes/servicios acumulados:*%0A"
+                        # Armado del encabezado de la parada para WhatsApp
+                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}*%0A"
+                        texto_paradas_wa += f"📍 {local['direccion']}%0A"
 
                         for det in local['detalles']:
+                            # Formato limpio y estructurado con todos los datos solicitados
                             texto_paradas_wa += (
-                                f"   • Orden #{det['orden']} | Activo: {det['activo']}%0A"
-                                f"     Tel: {det['tel']} | Obs: {det['obs']}%0A"
+                                f"   🔸 *Puesto de trabajo:* {det['puesto']}%0A"
+                                f"   🔸 *N° Orden:* {det['orden']}%0A"
+                                f"   🔸 *Activo Fijo:* {det['activo']}%0A"
+                                f"   🔸 *Observación:* {det['obs']}%0A%0A"
                             )
 
                             for orig_idx in local['indices_originales']:
@@ -435,15 +420,15 @@ if uploaded_file is not None:
 
                     st.link_button("🗺️ Abrir Hoja de Ruta en Google Maps", link_maps)
                     
+                    # Mensaje final de WhatsApp unificado
                     msg_wa = (
                         f"🚚 *HOJA DE RUTA - {v_nombre.upper()}*%0A"
-                        f"📍 *Punto de Salida/Retorno:* {config_actual['depot_address']}%0A"
                         f"📊 *Ubicaciones a Visitar:* {len(sub_df_ordenado)} puntos%0A"
                         f"----------------------------------------%0A"
                         f"📋 *DETALLE DE PUNTOS Y ACTIVOS:*%0A"
-                        f"{texto_paradas_wa}%0A"
+                        f"{texto_paradas_wa}"
                         f"----------------------------------------%0A"
-                        f"🔗 *Link de Google Maps Ordenado:*%0A{urllib.parse.quote(link_maps)}"
+                        f"🔗 *Link de Ruta Google Maps:*%0A{urllib.parse.quote(link_maps)}"
                     )
                     
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
