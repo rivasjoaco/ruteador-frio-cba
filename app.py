@@ -32,35 +32,41 @@ CENTROS_CONFIG = {
     }
 }
 
-# DICCIONARIO MAESTRO DE CÓDIGOS POSTALES
-DICCIONARIO_CP = {
-    "5000": "Córdoba Capital, Córdoba",
-    "5003": "Córdoba Capital, Córdoba",
-    "5008": "Córdoba Capital, Córdoba",
-    "5009": "Córdoba Capital, Córdoba",
-    "5010": "Córdoba Capital, Córdoba",
-    "5012": "Córdoba Capital, Córdoba",
-    "5014": "Córdoba Capital, Córdoba",
-    "5016": "Córdoba Capital, Córdoba",
-    "5105": "Villa Allende, Córdoba",
-    "5143": "Malagueño, Córdoba",
-    "5151": "La Calera, Córdoba",
-    "5152": "Villa Carlos Paz, Córdoba",
-    "5123": "Alta Gracia, Córdoba",
-    "5186": "Alta Gracia, Córdoba",
-    "5194": "Villa General Belgrano, Córdoba",
-    "5800": "Río Cuarto, Córdoba",
-    "5870": "Villa Dolores, Córdoba",
-    "5891": "Mina Clavero, Córdoba",
-    "5960": "Río Segundo, Córdoba",
-    "5986": "Oncativo, Córdoba",
-    "5400": "San Juan Capital, San Juan",
-    "5425": "Santa Lucía, San Juan",
-    "5500": "Mendoza Capital, Mendoza",
-    "5501": "Godoy Cruz, Mendoza",
-    "5519": "Guaymallén, Mendoza",
-    "5507": "Luján de Cuyo, Mendoza"
-}
+# ==========================================
+# CARGA DE DICCIONARIO DESDE ARCHIVO CSV
+# ==========================================
+@st.cache_data
+def cargar_diccionario_cp():
+    try:
+        # Leemos el CSV asegurando que todo se tome como texto
+        df_cp = pd.read_csv("codigos_postales.csv", dtype=str)
+        
+        # Estandarizamos los nombres de las columnas (minúsculas y sin espacios) por si vienen raros
+        df_cp.columns = [str(c).replace('"', '').strip().lower() for c in df_cp.columns]
+        
+        # Verificamos que estén las columnas clave que mencionaste
+        if 'cp' in df_cp.columns and 'localidad' in df_cp.columns and 'provincia' in df_cp.columns:
+            
+            # Limpiamos los datos y armamos la estructura "Localidad, Provincia"
+            df_cp['cp'] = df_cp['cp'].str.strip()
+            df_cp['ubicacion_google'] = df_cp['localidad'].str.strip() + ", " + df_cp['provincia'].str.strip()
+            
+            # Borramos los CP que puedan estar vacíos por error en la base
+            df_cp = df_cp.dropna(subset=['cp'])
+            
+            # Armamos y devolvemos el diccionario dinámico
+            return dict(zip(df_cp['cp'], df_cp['ubicacion_google']))
+            
+        else:
+            st.warning("⚠️ El archivo CSV no tiene las columnas exactas (cp, localidad, provincia).")
+            return {}
+            
+    except Exception as e:
+        st.warning(f"⚠️ Error al leer codigos_postales.csv: {e}")
+        return {}
+
+DICCIONARIO_CP = cargar_diccionario_cp()
+# ==========================================
 
 MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
