@@ -105,6 +105,10 @@ st.subheader("Ruteador Multirregión (Geolocalización Inteligente)")
 st.sidebar.header("⚙️ Configuración")
 google_api_key = st.sidebar.text_input("Ingrese Google Maps API Key:", type="password")
 
+if st.sidebar.button("🔄 Actualizar base de Códigos Postales"):
+    st.cache_data.clear()
+    st.rerun()
+
 if not google_api_key:
     st.info("👈 **Para comenzar, ingresá tu Google Maps API Key en el menú lateral izquierdo.**")
     st.stop()
