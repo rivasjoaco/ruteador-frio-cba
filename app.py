@@ -313,57 +313,89 @@ if uploaded_file is not None:
     with col_v2:
         st.info(f"💡 **Sugerencia:** Para **{total_direcciones_unicas} ubicaciones**, recomendamos despachar **{sug_vehiculos} vehículo(s)**.")
 
-    if st.button("⚡ Optimizar y Despachar Flota", type="primary"):
-        if df_filtrado_activo.empty:
-            st.error("No hay direcciones válidas para procesar el ruteo.")
-            st.stop()
+    if df_filtrado_activo.empty:
+        st.error("No hay direcciones válidas para procesar el ruteo.")
+        st.stop()
 
-        with st.spinner("Agrupando locales y calculando rutas óptimas..."):
+    # --- 1. AGRUPACIÓN AUTOMÁTICA (K-MEANS) ---
+    grupos_locales = []
+    for (dir_orig, loc_map), group in df_filtrado_activo.groupby(['direccion_limpia', 'Localidad_Mapeada']):
+        dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
+        cache_key = f"{dir_final}_{loc_map}"
+        
+        if cache_key in st.session_state.coords_cache_gmaps:
+            lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
+        else:
+            lat, lng, formatted_addr = config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_orig
+
+        detalles_ordenes = []
+        for _, row in group.iterrows():
+            detalles_ordenes.append({
+                'orden': str(row[col_orden]),
+                'cliente': str(row[col_cliente]),
+                'tel': str(row[col_telefono]),
+                'activo': str(row[col_activo]),
+                'obs': str(row[col_texto_breve]),
+                'puesto': str(row[col_puesto])
+            })
+        
+        grupos_locales.append({
+            'direccion': formatted_addr,
+            'cliente_principal': group[col_cliente].iloc[0],
+            'lat': lat,
+            'lng': lng,
+            'cant_ordenes': len(group),
+            'detalles': detalles_ordenes,
+            'indices_originales': group.index.tolist()
+        })
+
+    df_locales = pd.DataFrame(grupos_locales)
+    depot_lat, depot_lng = config_actual["depot_coords"]
+
+    if cant_vehiculos > 1 and len(df_locales) >= cant_vehiculos:
+        coords_matrix = df_locales[['lat', 'lng']].values
+        kmeans = KMeans(n_clusters=cant_vehiculos, random_state=42, n_init=10).fit(coords_matrix)
+        df_locales['cluster'] = kmeans.labels_
+        vehiculo_map = {i: f'Vehículo {i+1}' for i in range(cant_vehiculos)}
+        df_locales['Vehículo Asignado'] = df_locales['cluster'].map(vehiculo_map)
+    else:
+        df_locales['Vehículo Asignado'] = 'Vehículo 1'
+
+    # --- 2. TABLA INTERACTIVA DE AJUSTE MANUAL ---
+    st.markdown("#### 🔀 Revisión y Ajuste de Zonas")
+    st.caption("El algoritmo agrupa matemáticamente por cercanía. Si querés forzar un cambio, **hacé clic en la columna 'Vehículo Asignado' y modificalo a tu gusto** antes de calcular las rutas.")
+
+    opciones_vehiculos = [f"Vehículo {i+1}" for i in range(cant_vehiculos)]
+    
+    df_para_editar = df_locales[['cliente_principal', 'direccion', 'cant_ordenes', 'Vehículo Asignado']].copy()
+    
+    df_editado = st.data_editor(
+        df_para_editar,
+        column_config={
+            "cliente_principal": st.column_config.TextColumn("Cliente", disabled=True),
+            "direccion": st.column_config.TextColumn("Ubicación", disabled=True),
+            "cant_ordenes": st.column_config.NumberColumn("Órdenes", disabled=True),
+            "Vehículo Asignado": st.column_config.SelectboxColumn(
+                "Vehículo Asignado (Editable)", 
+                help="Clickeá para asignar este cliente a otro vehículo",
+                width="medium",
+                options=opciones_vehiculos, 
+                required=True
+            )
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="tabla_ajuste_vehiculos"
+    )
+
+    # Actualizamos el dataframe maestro con las decisiones manuales
+    df_locales['Vehículo Asignado'] = df_editado['Vehículo Asignado']
+
+    # --- 3. BOTÓN FINAL: OPTIMIZAR SECUENCIA (OR-TOOLS) ---
+    st.divider()
+    if st.button("⚡ Calcular Secuencias Óptimas y Despachar", type="primary"):
+        with st.spinner("Trazando las rutas para los vehículos configurados..."):
             
-            grupos_locales = []
-            for (dir_orig, loc_map), group in df_filtrado_activo.groupby(['direccion_limpia', 'Localidad_Mapeada']):
-                dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
-                cache_key = f"{dir_final}_{loc_map}"
-                
-                if cache_key in st.session_state.coords_cache_gmaps:
-                    lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
-                else:
-                    lat, lng, formatted_addr = config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_orig
-
-                detalles_ordenes = []
-                for _, row in group.iterrows():
-                    detalles_ordenes.append({
-                        'orden': str(row[col_orden]),
-                        'cliente': str(row[col_cliente]),
-                        'tel': str(row[col_telefono]),
-                        'activo': str(row[col_activo]),
-                        'obs': str(row[col_texto_breve]),
-                        'puesto': str(row[col_puesto])
-                    })
-                
-                grupos_locales.append({
-                    'direccion': formatted_addr,
-                    'cliente_principal': group[col_cliente].iloc[0],
-                    'lat': lat,
-                    'lng': lng,
-                    'cant_ordenes': len(group),
-                    'detalles': detalles_ordenes,
-                    'indices_originales': group.index.tolist()
-                })
-
-            df_locales = pd.DataFrame(grupos_locales)
-
-            depot_lat, depot_lng = config_actual["depot_coords"]
-
-            if cant_vehiculos > 1 and len(df_locales) >= cant_vehiculos:
-                coords_matrix = df_locales[['lat', 'lng']].values
-                kmeans = KMeans(n_clusters=cant_vehiculos, random_state=42, n_init=10).fit(coords_matrix)
-                df_locales['cluster'] = kmeans.labels_
-                vehiculo_map = {i: f'Vehículo {i+1}' for i in range(cant_vehiculos)}
-                df_locales['Vehículo Asignado'] = df_locales['cluster'].map(vehiculo_map)
-            else:
-                df_locales['Vehículo Asignado'] = 'Vehículo 1'
-
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
                 for _, row in df_grupo.iterrows():
@@ -418,8 +450,7 @@ if uploaded_file is not None:
 
             vehiculos_unicos = df_locales['Vehículo Asignado'].unique()
 
-            st.divider()
-            st.info(f"💡 **DESPACHO ZONIFICADO:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
+            st.info(f"💡 **DESPACHO FINAL:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
 
             cols = st.columns(len(vehiculos_unicos))
             
@@ -430,11 +461,8 @@ if uploaded_file is not None:
                 
                 direcciones_ordenadas = sub_df_ordenado['direccion'].tolist()
                 
-                # ==========================================
-                # NUEVO: DIVISOR AUTOMÁTICO DE RUTAS (>9 PARADAS)
-                # ==========================================
                 rutas_links = []
-                tamano_bloque = 9 # Límite de waypoints en Google Maps
+                tamano_bloque = 9
                 
                 for i in range(0, len(direcciones_ordenadas), tamano_bloque):
                     bloque = direcciones_ordenadas[i:i+tamano_bloque]
@@ -491,10 +519,10 @@ if uploaded_file is not None:
                                 f"   🔸 *Observación:* {det['obs']}%0A%0A"
                             )
 
-                            for orig_idx in local['indices_originales']:
-                                df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
-                                df.loc[orig_idx, 'Estado'] = 'En Ruta'
-                                df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
+                        for orig_idx in local['indices_originales']:
+                            df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
+                            df.loc[orig_idx, 'Estado'] = 'En Ruta'
+                            df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
 
                         st.write("---")
                         paso += 1
