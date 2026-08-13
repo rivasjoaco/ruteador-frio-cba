@@ -149,6 +149,22 @@ if uploaded_file is not None:
 
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
+    # ==========================================
+    # NUEVO: ALERTA DE CÓDIGOS POSTALES FALTANTES
+    # ==========================================
+    cps_en_ordenes = df_filtrado[col_cp].apply(lambda x: str(x).replace('.0', '').strip() if pd.notna(x) else "").unique()
+    cps_faltantes = [cp for cp in cps_en_ordenes if cp and cp not in DICCIONARIO_CP]
+
+    if cps_faltantes:
+        st.warning(
+            f"🚨 **¡ALERTA DE CÓDIGOS POSTALES NO REGISTRADOS!**\n\n"
+            f"Se detectaron **{len(cps_faltantes)} Código(s) Postal(es)** en esta planilla que no están en tu archivo maestro de GitHub:\n\n"
+            f"👉 **{', '.join(cps_faltantes)}**\n\n"
+            f"⚠️ *El sistema intentará ubicarlos usando la ciudad base ({config_actual['ciudad']}), pero si son del interior, probablemente requieran revisión manual en el paso siguiente. Acordate de agregarlos a tu CSV de GitHub para la próxima.*"
+        )
+        st.divider()
+    # ==========================================
+
     def obtener_localidad(cp_val):
         cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
         return DICCIONARIO_CP.get(cp_limpio, f"{config_actual['ciudad']}, {config_actual['provincia']}")
