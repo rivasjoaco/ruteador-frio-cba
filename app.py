@@ -191,6 +191,38 @@ if uploaded_file is not None:
         st.stop()
         
     df_filtrado = df_filtrado[df_filtrado['Localidad_Mapeada'].isin(localidades_seleccionadas)].copy()
+
+# ==========================================
+    # NUEVO: FILTRO MANUAL DE ÓRDENES
+    # ==========================================
+    st.markdown("#### 🚫 Selección de Viajes Específicos")
+    st.caption("Destildá las órdenes puntuales que **NO** quieras procesar hoy para ahorrar consultas en el mapa.")
+    
+    # Le agregamos una columna de casilleros tildados por defecto
+    df_filtrado.insert(0, "Incluir", True)
+    
+    df_seleccion_ordenes = st.data_editor(
+        df_filtrado[['Incluir', col_orden, col_cliente, col_direccion, 'Localidad_Mapeada']],
+        column_config={
+            "Incluir": st.column_config.CheckboxColumn("¿Rutear?", default=True),
+            col_orden: st.column_config.TextColumn("N° Orden", disabled=True),
+            col_cliente: st.column_config.TextColumn("Cliente", disabled=True),
+            col_direccion: st.column_config.TextColumn("Dirección", disabled=True),
+            "Localidad_Mapeada": st.column_config.TextColumn("Zona", disabled=True)
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="filtro_ordenes_manual"
+    )
+    
+    # Filtramos para quedarnos solo con las que tienen el casillero en True
+    ordenes_seleccionadas = df_seleccion_ordenes[df_seleccion_ordenes['Incluir'] == True][col_orden].tolist()
+    df_filtrado = df_filtrado[df_filtrado[col_orden].isin(ordenes_seleccionadas)].copy()
+    
+    if df_filtrado.empty:
+        st.warning("⚠️ No dejaste ninguna orden seleccionada.")
+        st.stop()
+    # ==========================================
     
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw):
