@@ -38,7 +38,7 @@ CENTROS_CONFIG = {
         "ciudad": "Rosario"
     },
     "Sur (Centro 0A16)": {
-        "codigos": ["0A16", "A16", "0a16", "a16"], # Agregamos minúsculas por si SAP lo exporta distinto
+        "codigos": ["0A16", "A16", "0a16", "a16"], 
         "depot_address": "Depósito Base Sur, Bahía Blanca, Buenos Aires, Argentina",
         "depot_coords": (-38.7183, -62.2663), 
         "provincia": "Buenos Aires",
@@ -66,35 +66,36 @@ CENTROS_CONFIG = {
 @st.cache_data
 def cargar_diccionario_cp():
     try:
-        # Leemos el CSV asegurando que todo se tome como texto
         df_cp = pd.read_csv("codigos_postales.csv", dtype=str)
-        
-        # Estandarizamos los nombres de las columnas (minúsculas y sin espacios) por si vienen raros
         df_cp.columns = [str(c).replace('"', '').strip().lower() for c in df_cp.columns]
-        
-        # Verificamos que estén las columnas clave que mencionaste
         if 'cp' in df_cp.columns and 'localidad' in df_cp.columns and 'provincia' in df_cp.columns:
-            
-            # Limpiamos los datos y armamos la estructura "Localidad, Provincia"
             df_cp['cp'] = df_cp['cp'].str.strip()
             df_cp['ubicacion_google'] = df_cp['localidad'].str.strip() + ", " + df_cp['provincia'].str.strip()
-            
-            # Borramos los CP que puedan estar vacíos por error en la base
             df_cp = df_cp.dropna(subset=['cp'])
-            
-            # Armamos y devolvemos el diccionario dinámico
             return dict(zip(df_cp['cp'], df_cp['ubicacion_google']))
-            
         else:
             st.warning("⚠️ El archivo CSV no tiene las columnas exactas (cp, localidad, provincia).")
             return {}
-            
     except Exception as e:
         st.warning(f"⚠️ Error al leer codigos_postales.csv: {e}")
         return {}
 
 DICCIONARIO_CP = cargar_diccionario_cp()
+
 # ==========================================
+# CARGA DE MAESTRO DE CLIENTES (NUEVO)
+# ==========================================
+@st.cache_data
+def cargar_maestro_clientes():
+    try:
+        df_maestro = pd.read_csv("maestro_clientes.csv", dtype=str)
+        df_maestro.columns = [str(c).strip() for c in df_maestro.columns]
+        return df_maestro
+    except Exception as e:
+        st.warning(f"⚠️ No se encontró maestro_clientes.csv: {e}")
+        return pd.DataFrame()
+
+DF_MAESTRO = cargar_maestro_clientes()
 
 MINUTOS_POR_PARADA = 25
 MAX_HORAS_JORNADA = 7.5
@@ -137,7 +138,7 @@ if uploaded_file is not None:
     col_telefono = df.columns[5]
     col_cp = df.columns[6]
     col_texto_breve = df.columns[7]
-    col_puesto = df.columns[8]      # Col I: Puesto de trabajo
+    col_puesto = df.columns[8]      
     col_activo = df.columns[9]
     col_centro = df.columns[10]
 
@@ -154,7 +155,7 @@ if uploaded_file is not None:
     st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
 
     # ==========================================
-    # NUEVO: ALERTA DE CÓDIGOS POSTALES FALTANTES
+    # ALERTA DE CÓDIGOS POSTALES FALTANTES
     # ==========================================
     cps_en_ordenes = df_filtrado[col_cp].apply(lambda x: str(x).replace('.0', '').strip() if pd.notna(x) else "").unique()
     cps_faltantes = [cp for cp in cps_en_ordenes if cp and cp not in DICCIONARIO_CP]
@@ -162,164 +163,180 @@ if uploaded_file is not None:
     if cps_faltantes:
         st.warning(
             f"🚨 **¡ALERTA DE CÓDIGOS POSTALES NO REGISTRADOS!**\n\n"
-            f"Se detectaron **{len(cps_faltantes)} Código(s) Postal(es)** en esta planilla que no están en tu archivo maestro de GitHub:\n\n"
-            f"👉 **{', '.join(cps_faltantes)}**\n\n"
-            f"⚠️ *El sistema intentará ubicarlos usando la ciudad base ({config_actual['ciudad']}), pero si son del interior, probablemente requieran revisión manual en el paso siguiente. Acordate de agregarlos a tu CSV de GitHub para la próxima.*"
+            f"Faltan estos CPs en tu archivo maestro: {', '.join(cps_faltantes)}\n\n"
+            f"⚠️ *El sistema intentará ubicarlos igual, pero agregalos a tu CSV para la próxima.*"
         )
         st.divider()
-    # ==========================================
 
+    # ==========================================
+    # CRUCE CON BASE MAESTRA
+    # ==========================================
+    if not DF_MAESTRO.empty and 'Cliente' in DF_MAESTRO.columns:
+        df_filtrado[col_cliente] = df_filtrado[col_cliente].astype(str).str.strip()
+        DF_MAESTRO['Cliente'] = DF_MAESTRO['Cliente'].astype(str).str.strip()
+        
+        # Cruzamos las órdenes con los 66k clientes para traernos Zona, Lat y Lng
+        df_filtrado = df_filtrado.merge(
+            DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud']],
+            left_on=col_cliente,
+            right_on='Cliente',
+            how='left'
+        )
+    else:
+        df_filtrado['Zona de Venta'] = "Sin Zona"
+        df_filtrado['Latitud'] = np.nan
+        df_filtrado['Longitud'] = np.nan
+
+    df_filtrado['Zona de Venta'] = df_filtrado['Zona de Venta'].fillna('ZONA DESCONOCIDA')
+
+    # Para el Plan B (Google Maps) mantenemos la localidad mapeada
     def obtener_localidad(cp_val):
         cp_limpio = str(cp_val).replace('.0', '').strip() if pd.notna(cp_val) else ""
         return DICCIONARIO_CP.get(cp_limpio, f"{config_actual['ciudad']}, {config_actual['provincia']}")
-
+    
     df_filtrado['Localidad_Mapeada'] = df_filtrado[col_cp].apply(obtener_localidad)
 
+    # ==========================================
+    # FILTRO OPERATIVO (ZONAS DE VENTA)
+    # ==========================================
     st.divider()
-    st.markdown("### 🌍 Filtro de Localidades (Zonificación)")
+    st.markdown("### 🌍 Filtro Operativo (Zonas de Venta)")
     
-    localidades_presentes = sorted(df_filtrado['Localidad_Mapeada'].unique())
-    
-    localidades_seleccionadas = st.multiselect(
-        "Seleccioná qué zonas querés planificar en esta tanda de ruteo:",
-        options=localidades_presentes,
-        default=localidades_presentes
+    zonas_presentes = sorted(df_filtrado['Zona de Venta'].unique())
+    zonas_seleccionadas = st.multiselect(
+        "Seleccioná qué Zonas de Venta querés rutear hoy:",
+        options=zonas_presentes,
+        default=zonas_presentes
     )
     
-    if not localidades_seleccionadas:
-        st.info("👆 Seleccioná al menos una zona para continuar con la validación de mapas.")
+    if not zonas_seleccionadas:
+        st.info("👆 Seleccioná al menos una Zona de Venta para continuar.")
         st.stop()
         
-    df_filtrado = df_filtrado[df_filtrado['Localidad_Mapeada'].isin(localidades_seleccionadas)].copy()
+    df_filtrado = df_filtrado[df_filtrado['Zona de Venta'].isin(zonas_seleccionadas)].copy()
 
-# ==========================================
-    # NUEVO: FILTRO MANUAL DE ÓRDENES
+    # ==========================================
+    # FILTRO MANUAL ORDEN POR ORDEN
     # ==========================================
     st.markdown("#### 🚫 Selección de Viajes Específicos")
-    st.caption("Destildá las órdenes puntuales que **NO** quieras procesar hoy para ahorrar consultas en el mapa.")
-    
-    # Le agregamos una columna de casilleros tildados por defecto
+    st.caption("Destildá las órdenes puntuales que **NO** quieras procesar hoy.")
     df_filtrado.insert(0, "Incluir", True)
     
     df_seleccion_ordenes = st.data_editor(
-        df_filtrado[['Incluir', col_orden, col_cliente, col_direccion, 'Localidad_Mapeada']],
+        df_filtrado[['Incluir', col_orden, col_cliente, col_direccion, 'Zona de Venta']],
         column_config={
             "Incluir": st.column_config.CheckboxColumn("¿Rutear?", default=True),
             col_orden: st.column_config.TextColumn("N° Orden", disabled=True),
             col_cliente: st.column_config.TextColumn("Cliente", disabled=True),
             col_direccion: st.column_config.TextColumn("Dirección", disabled=True),
-            "Localidad_Mapeada": st.column_config.TextColumn("Zona", disabled=True)
+            "Zona de Venta": st.column_config.TextColumn("Zona", disabled=True)
         },
         hide_index=True,
         use_container_width=True,
         key="filtro_ordenes_manual"
     )
     
-    # Filtramos para quedarnos solo con las que tienen el casillero en True
     ordenes_seleccionadas = df_seleccion_ordenes[df_seleccion_ordenes['Incluir'] == True][col_orden].tolist()
     df_filtrado = df_filtrado[df_filtrado[col_orden].isin(ordenes_seleccionadas)].copy()
     
     if df_filtrado.empty:
         st.warning("⚠️ No dejaste ninguna orden seleccionada.")
         st.stop()
-    # ==========================================
-    
+
     def limpiar_direccion(dir_raw):
-        if pd.isna(dir_raw):
-            return ""
+        if pd.isna(dir_raw): return ""
         dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
-        patron_basura = r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*'
-        dir_str = re.sub(patron_basura, '', dir_str)
-        dir_str = re.sub(r'\s+', ' ', dir_str).strip()
-        return dir_str
+        dir_str = re.sub(r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*', '', dir_str)
+        return re.sub(r'\s+', ' ', dir_str).strip()
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
 
     def geocodificar_google(dir_texto, ubicacion_geografica):
         if "S/N" in dir_texto.upper() or "S/ N" in dir_texto.upper():
             return config_actual["depot_coords"][0], config_actual["depot_coords"][1], "Falta altura exacta (S/N)", False
-        
         query_principal = f"{dir_texto}, {ubicacion_geografica}, Argentina"
-        
         try:
             res = gmaps.geocode(query_principal, region='ar', components={"country": "AR"})
             if res and len(res) > 0:
-                location = res[0]['geometry']['location']
-                formatted_address = res[0].get('formatted_address', dir_texto)
-                return location['lat'], location['lng'], formatted_address, True
-            else:
-                return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"Google no ubicó: {query_principal}", False
+                loc = res[0]['geometry']['location']
+                return loc['lat'], loc['lng'], res[0].get('formatted_address', dir_texto), True
+            return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"No ubicado", False
         except Exception as e:
-            return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API: {str(e)}", False
+            return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API", False
 
-    if "coords_cache_gmaps" not in st.session_state:
-        st.session_state.coords_cache_gmaps = {}
-    if "direcciones_editadas" not in st.session_state:
-        st.session_state.direcciones_editadas = {}
-    if "direcciones_descartadas" not in st.session_state:
-        st.session_state.direcciones_descartadas = set()
+    if "coords_cache" not in st.session_state: st.session_state.coords_cache = {}
+    if "direcciones_editadas" not in st.session_state: st.session_state.direcciones_editadas = {}
+    if "direcciones_descartadas" not in st.session_state: st.session_state.direcciones_descartadas = set()
 
+    # ==========================================
+    # VALIDACIÓN DE COORDENADAS (MAESTRO + GOOGLE)
+    # ==========================================
     st.divider()
     c_tit, c_btn = st.columns([3, 1])
-    c_tit.markdown("### 🔍 Validación con Google Maps")
-    
-    if c_btn.button("🧹 Limpiar Memoria y Reintentar"):
-        st.session_state.coords_cache_gmaps = {}
+    c_tit.markdown("### 🔍 Validación de Coordenadas")
+    if c_btn.button("🧹 Limpiar Memoria"):
+        st.session_state.coords_cache = {}
         st.rerun()
 
-    direcciones_unicas = df_filtrado[['direccion_limpia', 'Localidad_Mapeada']].drop_duplicates()
+    direcciones_unicas = df_filtrado[['direccion_limpia', 'Localidad_Mapeada', 'Latitud', 'Longitud']].drop_duplicates(subset=['direccion_limpia', 'Localidad_Mapeada'])
     no_encontradas = []
 
-    with st.spinner("Consultando a Google Maps..."):
+    with st.spinner("Buscando en Base Maestra y Google Maps..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             loc_map = row_dir['Localidad_Mapeada']
             
-            if d_orig in st.session_state.direcciones_descartadas:
-                continue
-
+            if d_orig in st.session_state.direcciones_descartadas: continue
             d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
             cache_key = f"{d_actual}_{loc_map}"
 
-            if cache_key not in st.session_state.coords_cache_gmaps:
-                lat, lng, formatted_addr, exito = geocodificar_google(d_actual, loc_map)
-                st.session_state.coords_cache_gmaps[cache_key] = (lat, lng, formatted_addr, exito)
+            if cache_key not in st.session_state.coords_cache:
+                # 1. Chequeamos si el maestro trajo coordenadas válidas
+                lat_m = row_dir['Latitud']
+                lng_m = row_dir['Longitud']
+                
+                if pd.notna(lat_m) and pd.notna(lng_m) and str(lat_m).strip() != "":
+                    try:
+                        lat_val = float(str(lat_m).replace(',', '.'))
+                        lng_val = float(str(lng_m).replace(',', '.'))
+                        st.session_state.coords_cache[cache_key] = (lat_val, lng_val, f"{d_actual} (Base Maestra)", True)
+                    except:
+                        lat, lng, f_addr, exito = geocodificar_google(d_actual, loc_map)
+                        st.session_state.coords_cache[cache_key] = (lat, lng, f_addr, exito)
+                else:
+                    # 2. Plan B: Google Maps
+                    lat, lng, f_addr, exito = geocodificar_google(d_actual, loc_map)
+                    st.session_state.coords_cache[cache_key] = (lat, lng, f_addr, exito)
             
-            lat, lng, formatted_addr, exito = st.session_state.coords_cache_gmaps[cache_key]
-            
-            if not exito:
-                no_encontradas.append((d_orig, d_actual, formatted_addr))
+            lat, lng, f_addr, exito = st.session_state.coords_cache[cache_key]
+            if not exito: no_encontradas.append((d_orig, d_actual, f_addr))
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
-        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** que requieren revisión manual:")
+        st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** nuevas o sin coordenadas en el maestro que Google no ubicó:")
         for d_orig, d_actual, error_msg in no_encontradas:
             with st.container():
-                st.caption(f"🛑 **Respuesta de Google:** {error_msg}")
+                st.caption(f"🛑 **Detalle:** {error_msg}")
                 c1, c2, c3 = st.columns([3, 1, 1])
-                with c1:
-                    nueva_dir = st.text_input("Dirección:", value=d_actual, key=f"input_{d_orig}")
+                with c1: nueva_dir = st.text_input("Dirección:", value=d_actual, key=f"input_{d_orig}")
                 with c2:
-                    st.write(" ")
-                    st.write(" ")
+                    st.write(" "); st.write(" ")
                     if st.button("🔄 Recalcular", key=f"recalc_{d_orig}"):
                         st.session_state.direcciones_editadas[d_orig] = nueva_dir
-                        for k in list(st.session_state.coords_cache_gmaps.keys()):
-                            if d_orig in k or d_actual in k:
-                                del st.session_state.coords_cache_gmaps[k]
+                        for k in list(st.session_state.coords_cache.keys()):
+                            if d_orig in k or d_actual in k: del st.session_state.coords_cache[k]
                         st.rerun()
                 with c3:
-                    st.write(" ")
-                    st.write(" ")
+                    st.write(" "); st.write(" ")
                     if st.button("❌ Descartar", key=f"discard_{d_orig}"):
                         st.session_state.direcciones_descartadas.add(d_orig)
                         st.rerun()
                 st.divider()
     else:
-        st.success("✅ ¡Google Maps ubicó correctamente todas las direcciones de la zona seleccionada!")
+        st.success("✅ ¡Todas las ubicaciones fueron procesadas con éxito (Base Maestra + Google Maps)!")
 
     # ==========================================
     # PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
@@ -355,8 +372,9 @@ if uploaded_file is not None:
         dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
         cache_key = f"{dir_final}_{loc_map}"
         
-        if cache_key in st.session_state.coords_cache_gmaps:
-            lat, lng, formatted_addr, _ = st.session_state.coords_cache_gmaps[cache_key]
+        # Corregido: Ahora lee coords_cache correctamente
+        if cache_key in st.session_state.coords_cache:
+            lat, lng, formatted_addr, _ = st.session_state.coords_cache[cache_key]
         else:
             lat, lng, formatted_addr = config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_orig
 
@@ -420,7 +438,6 @@ if uploaded_file is not None:
         key="tabla_ajuste_vehiculos"
     )
 
-    # Actualizamos el dataframe maestro con las decisiones manuales
     df_locales['Vehículo Asignado'] = df_editado['Vehículo Asignado']
 
     # --- 3. BOTÓN FINAL: OPTIMIZAR SECUENCIA (OR-TOOLS) ---
