@@ -172,8 +172,21 @@ if uploaded_file is not None:
     # CRUCE CON BASE MAESTRA
     # ==========================================
     if not DF_MAESTRO.empty and 'Cliente' in DF_MAESTRO.columns:
-        df_filtrado[col_cliente] = df_filtrado[col_cliente].astype(str).str.strip()
-        DF_MAESTRO['Cliente'] = DF_MAESTRO['Cliente'].astype(str).str.strip()
+        # Limpieza y estandarización a 9 dígitos exactos
+        df_filtrado[col_cliente] = (
+            df_filtrado[col_cliente]
+            .astype(str)
+            .str.replace('.0', '', regex=False)
+            .str.strip()
+            .str.zfill(9) 
+        )
+        DF_MAESTRO['Cliente'] = (
+            DF_MAESTRO['Cliente']
+            .astype(str)
+            .str.replace('.0', '', regex=False)
+            .str.strip()
+            .str.zfill(9) 
+        )
         
         # Cruzamos las órdenes con los 66k clientes para traernos Zona, Lat y Lng
         df_filtrado = df_filtrado.merge(
