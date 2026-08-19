@@ -88,7 +88,7 @@ DICCIONARIO_CP = cargar_diccionario_cp()
 @st.cache_data
 def cargar_maestro_clientes():
     try:
-        df_maestro = pd.read_csv("maestro_clientes.csv", dtype=str)
+        df_maestro = pd.read_csv("maestro_clientes.csv", dtype=str, sep=";", on_bad_lines='skip')
         df_maestro.columns = [str(c).strip() for c in df_maestro.columns]
         return df_maestro
     except Exception as e:
