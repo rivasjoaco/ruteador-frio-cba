@@ -82,7 +82,7 @@ def cargar_diccionario_cp():
 DICCIONARIO_CP = cargar_diccionario_cp()
 
 # ==========================================
-# CARGA DE MAESTRO DE CLIENTES (NUEVO)
+# CARGA DE MAESTRO DE CLIENTES
 # ==========================================
 @st.cache_data
 def cargar_maestro_clientes():
@@ -97,7 +97,6 @@ def cargar_maestro_clientes():
 DF_MAESTRO = cargar_maestro_clientes()
 
 MINUTOS_POR_PARADA = 25
-MAX_HORAS_JORNADA = 7.5
 
 st.title("🚚 Torre de Control - Servicio Técnico Frío")
 st.subheader("Ruteador Multirregión (Geolocalización Inteligente)")
@@ -133,13 +132,14 @@ if uploaded_file is not None:
     # Mapeo de columnas
     col_orden = df.columns[0]      # A
     col_cliente = df.columns[1]    # B
-    col_direccion = df.columns[3]  # D (Calle)
+    col_direccion = df.columns[3]  # D
     col_telefono = df.columns[5]   # F
     col_cp = df.columns[6]         # G
     col_texto_breve = df.columns[7]# H
     col_puesto = df.columns[8]     # I
     col_activo = df.columns[9]     # J
     col_centro = df.columns[10]    # K
+    col_fecha = df.columns[11]     # L (Fecha creación)
 
     opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
     config_actual = CENTROS_CONFIG[opcion_region]
@@ -147,8 +147,7 @@ if uploaded_file is not None:
     st.markdown("#### 📍 Origen y Destino de la Flota")
     origen_personalizado = st.text_input(
         "Dirección de salida y regreso (Editable):", 
-        value=config_actual["depot_address"],
-        help="Si hoy los técnicos salen desde un punto distinto al depósito base, cambialo acá."
+        value=config_actual["depot_address"]
     )
 
     codigos_centro = [str(c) for c in config_actual["codigos"]]
@@ -158,8 +157,18 @@ if uploaded_file is not None:
         st.warning(f"⚠️ No se encontraron órdenes correspondientes a {opcion_region}.")
         st.stop()
 
+    # --- NUEVO: CÁLCULO DE ANTIGÜEDAD DE LA ORDEN ---
+    df_filtrado[col_fecha] = pd.to_datetime(df_filtrado[col_fecha], errors='coerce')
+    hoy = pd.Timestamp.today()
+    df_filtrado['Dias_Pendiente'] = (hoy - df_filtrado[col_fecha]).dt.days.fillna(0).astype(int)
+    
+    # Creamos la alerta visual
+    df_filtrado['Alerta_Fecha'] = df_filtrado['Dias_Pendiente'].apply(
+        lambda x: f"🚨 {x} días" if x >= 3 else f"🟢 {x} días" if x == 0 else f"🟡 {x} días"
+    )
+
     # ==========================================
-    # CRUCE CON BASE MAESTRA Y DIRECCIÓN
+    # CRUCE CON BASE MAESTRA
     # ==========================================
     if not DF_MAESTRO.empty and 'Cliente' in DF_MAESTRO.columns:
         df_filtrado[col_cliente] = (
@@ -177,7 +186,6 @@ if uploaded_file is not None:
             .str.zfill(9) 
         )
         
-        # CRUZAMOS Y TRAEMOS LA COLUMNA F DEL MAESTRO ("Dirección")
         df_filtrado = df_filtrado.merge(
             DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Entre Calles', 'Dirección']],
             left_on=col_cliente,
@@ -223,10 +231,12 @@ if uploaded_file is not None:
     st.markdown("#### 🚫 Selección de Viajes Específicos")
     df_filtrado.insert(0, "Incluir", True)
     
+    # --- ACTUALIZADO: MOSTRAMOS LA ANTIGÜEDAD EN LA TABLA ---
     df_seleccion_ordenes = st.data_editor(
-        df_filtrado[['Incluir', col_orden, col_cliente, col_direccion, 'Zona de Venta']],
+        df_filtrado[['Incluir', 'Alerta_Fecha', col_orden, col_cliente, col_direccion, 'Zona de Venta']],
         column_config={
             "Incluir": st.column_config.CheckboxColumn("¿Rutear?", default=True),
+            "Alerta_Fecha": st.column_config.TextColumn("Demora", disabled=True),
             col_orden: st.column_config.TextColumn("N° Orden", disabled=True),
             col_cliente: st.column_config.TextColumn("Cliente", disabled=True),
             col_direccion: st.column_config.TextColumn("Dirección", disabled=True),
@@ -243,7 +253,6 @@ if uploaded_file is not None:
     if df_filtrado.empty:
         st.stop()
 
-    # --- LIMPIEZA AVANZADA CON ELIMINACIÓN DE TILDES ---
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw): return ""
         dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
@@ -271,7 +280,7 @@ if uploaded_file is not None:
     if "direcciones_descartadas" not in st.session_state: st.session_state.direcciones_descartadas = set()
 
     # ==========================================
-    # VALIDACIÓN DE COORDENADAS ESTRICTA + CONTROL DE SUCURSALES
+    # VALIDACIÓN DE COORDENADAS
     # ==========================================
     st.divider()
     c_tit, c_btn = st.columns([3, 1])
@@ -280,7 +289,6 @@ if uploaded_file is not None:
         st.session_state.coords_cache = {}
         st.rerun()
 
-    # Ahora buscamos valores únicos combinando Cliente + Dirección real
     direcciones_unicas = df_filtrado[['direccion_limpia', 'dir_maestro_limpia', 'Localidad_Mapeada', 'Latitud', 'Longitud', col_cliente]].drop_duplicates(subset=[col_cliente, 'direccion_limpia'])
     no_encontradas = []
 
@@ -293,7 +301,6 @@ if uploaded_file is not None:
             
             if d_orig in st.session_state.direcciones_descartadas: continue
             
-            # La clave ahora respeta las múltiples sucursales
             cache_key = f"{c_id}_{d_orig}"
 
             if cache_key not in st.session_state.coords_cache:
@@ -302,18 +309,15 @@ if uploaded_file is not None:
                 exito = False
                 motivo_error = "Faltan coordenadas en el Maestro"
 
-                # LÓGICA DE SUCURSALES: Comparar textos de dirección
                 es_casa_central = False
                 if d_orig == d_maestro:
                     es_casa_central = True
                 else:
                     pal_orig = [p for p in d_orig.split() if len(p) > 2 and not p.isdigit()]
                     pal_mae = [p for p in d_maestro.split() if len(p) > 2 and not p.isdigit()]
-                    # Si al menos comparten la calle principal, le damos el visto bueno
                     if pal_orig and pal_mae and pal_orig[0] == pal_mae[0]:
                         es_casa_central = True
                 
-                # Si no hay calle en el maestro, asumimos que sirve
                 if not d_maestro: es_casa_central = True
 
                 if es_casa_central:
@@ -345,7 +349,6 @@ if uploaded_file is not None:
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
-    # --- PANEL DE EMERGENCIAS (SUCURSALES Y FALTANTES) ---
     if no_encontradas:
         st.error(f"🚨 **¡ATENCIÓN!** Hay **{len(no_encontradas)} cliente(s)** con conflictos (Sin coordenadas o Sucursales Nuevas):")
         st.info("💡 **Acción requerida:** Podés autorizar a buscar la sucursal en Google Maps o descartar la orden.")
@@ -369,17 +372,16 @@ if uploaded_file is not None:
                         st.session_state.direcciones_descartadas.add(d_orig)
                         st.rerun()
                 st.write("---")
-        st.stop() # FRENA LA APP HASTA QUE SE RESUELVA EL CONFLICTO
+        st.stop()
     else:
         st.success("✅ ¡El 100% de las ubicaciones fueron validadas y analizadas!")
 
     # ==========================================
-    # PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
+    # PLANIFICACIÓN DE FLOTA
     # ==========================================
     st.divider()
     st.markdown("### 🚗 Planificación de Flota")
     
-    # Contamos paradas físicas reales
     total_direcciones_unicas = len(df_filtrado_activo[['direccion_limpia', col_cliente]].drop_duplicates())
     
     sug_vehiculos = 1
@@ -400,7 +402,6 @@ if uploaded_file is not None:
     if df_filtrado_activo.empty:
         st.stop()
 
-    # --- 1. AGRUPACIÓN AUTOMÁTICA (POR SUCURSAL EXACTA) ---
     grupos_locales = []
     
     for (cliente_id, dir_orig), group in df_filtrado_activo.groupby([col_cliente, 'direccion_limpia']):
@@ -411,6 +412,8 @@ if uploaded_file is not None:
         else:
             lat, lng, formatted_addr = config_actual["depot_coords"][0], config_actual["depot_coords"][1], dir_orig
 
+        max_dias = group['Dias_Pendiente'].max()
+        
         detalles_ordenes = []
         for _, row in group.iterrows():
             detalles_ordenes.append({
@@ -429,6 +432,8 @@ if uploaded_file is not None:
             'entre_calles': group['Entre Calles'].iloc[0],
             'lat': lat,
             'lng': lng,
+            'max_dias': max_dias,
+            'Forzar_Primera': False, # Nuevo campo para el VIP
             'cant_ordenes': len(group),
             'detalles': detalles_ordenes,
             'indices_originales': group.index.tolist()
@@ -445,11 +450,13 @@ if uploaded_file is not None:
     else:
         df_locales['Vehículo Asignado'] = 'Vehículo 1'
 
-    # --- 2. TABLA INTERACTIVA DE AJUSTE MANUAL ---
-    st.markdown("#### 🔀 Revisión y Ajuste de Zonas")
+    # --- 2. TABLA INTERACTIVA (AHORA CON BOTÓN VIP DE PRIORIDAD) ---
+    st.markdown("#### 🔀 Ajuste Manual y Prioridades")
+    st.caption("Elegí qué vehículo atiende a quién. **Si tildás '🌟 Forzar 1° Parada', el técnico irá ahí ni bien salga de la base.**")
+
     opciones_vehiculos = [f"Vehículo {i+1}" for i in range(cant_vehiculos)]
     
-    df_para_editar = df_locales[['cliente_principal', 'nombre_fantasia', 'direccion', 'cant_ordenes', 'Vehículo Asignado']].copy()
+    df_para_editar = df_locales[['cliente_principal', 'nombre_fantasia', 'direccion', 'max_dias', 'Vehículo Asignado', 'Forzar_Primera']].copy()
     
     df_editado = st.data_editor(
         df_para_editar,
@@ -457,10 +464,11 @@ if uploaded_file is not None:
             "cliente_principal": st.column_config.TextColumn("Nº Cliente", disabled=True),
             "nombre_fantasia": st.column_config.TextColumn("Fantasía", disabled=True),
             "direccion": st.column_config.TextColumn("Ubicación", disabled=True),
-            "cant_ordenes": st.column_config.NumberColumn("Órdenes", disabled=True),
+            "max_dias": st.column_config.NumberColumn("Demora (Días)", disabled=True),
             "Vehículo Asignado": st.column_config.SelectboxColumn(
                 "Vehículo Asignado", options=opciones_vehiculos, required=True
-            )
+            ),
+            "Forzar_Primera": st.column_config.CheckboxColumn("🌟 Forzar 1° Parada", default=False)
         },
         hide_index=True,
         use_container_width=True,
@@ -468,6 +476,7 @@ if uploaded_file is not None:
     )
 
     df_locales['Vehículo Asignado'] = df_editado['Vehículo Asignado']
+    df_locales['Forzar_Primera'] = df_editado['Forzar_Primera']
 
     # --- 3. BOTÓN FINAL ---
     st.divider()
@@ -521,6 +530,16 @@ if uploaded_file is not None:
 
                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+                # --- NUEVO: HACK MATEMÁTICO PARA FORZAR LA PRIMERA PARADA ---
+                priority_nodes = np.where(df_grupo['Forzar_Primera'] == True)[0]
+                if len(priority_nodes) > 0:
+                    # Si tildó varios para un mismo vehículo, toma el primero que encuentra
+                    first_priority_node = int(priority_nodes[0]) + 1
+                    solver = routing.solver()
+                    start_index = routing.Start(0)
+                    # Le inyectamos una regla estricta a la IA: El nodo siguiente al origen DEBE ser el prioritario
+                    solver.Add(routing.NextVar(start_index) == first_priority_node)
 
                 solution = routing.SolveWithParameters(search_parameters)
                 secuencia_indices, distancia_total = [], 0
@@ -585,11 +604,12 @@ if uploaded_file is not None:
                     for _, local in sub_df_ordenado.iterrows():
                         texto_fantasia = f" ({local['nombre_fantasia']})" if str(local['nombre_fantasia']).strip() else ""
                         texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
+                        texto_vip = " 🌟 *(Prioridad)*" if local['Forzar_Primera'] else ""
                         
-                        st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}**")
+                        st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}**")
                         st.caption(f"📍 {local['direccion']}")
                         
-                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}*%0A📍 {local['direccion']}%0A{texto_entre}"
+                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}"
 
                         for det in local['detalles']:
                             texto_paradas_wa += (
@@ -600,6 +620,7 @@ if uploaded_file is not None:
                         for orig_idx in local['indices_originales']:
                             df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
                             df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
+                            df.loc[orig_idx, 'Prioridad VIP'] = 'Sí' if local['Forzar_Primera'] else 'No'
 
                         st.write("---")
                         paso += 1
