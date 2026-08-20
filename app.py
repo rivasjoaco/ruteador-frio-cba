@@ -308,7 +308,7 @@ if uploaded_file is not None:
     direcciones_unicas = df_filtrado[['direccion_limpia', 'Localidad_Mapeada', 'Latitud', 'Longitud']].drop_duplicates(subset=['direccion_limpia', 'Localidad_Mapeada'])
     no_encontradas = []
 
- with st.spinner("Buscando en Base Maestra y Google Maps..."):
+    with st.spinner("Buscando en Base Maestra y Google Maps..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
             loc_map = row_dir['Localidad_Mapeada']
@@ -353,6 +353,8 @@ if uploaded_file is not None:
             
             lat, lng, f_addr, exito = st.session_state.coords_cache[cache_key]
             if not exito: no_encontradas.append((d_orig, d_actual, f_addr))
+
+    df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
     if no_encontradas:
         st.warning(f"⚠️ **Atención:** Hay **{len(no_encontradas)} dirección(es)** nuevas o sin coordenadas en el maestro que Google no ubicó:")
