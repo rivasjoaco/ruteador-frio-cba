@@ -406,9 +406,11 @@ if uploaded_file is not None:
                 'puesto': str(row[col_puesto])
             })
         
-        grupos_locales.append({
+            grupos_locales.append({
             'direccion': formatted_addr,
             'cliente_principal': group[col_cliente].iloc[0],
+            'nombre_fantasia': group['Nombre Fantasía'].iloc[0],
+            'entre_calles': group['Entre Calles'].iloc[0],
             'lat': lat,
             'lng': lng,
             'cant_ordenes': len(group),
