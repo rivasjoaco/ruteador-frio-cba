@@ -157,7 +157,7 @@ if uploaded_file is not None:
         st.warning(f"⚠️ No se encontraron órdenes correspondientes a {opcion_region}.")
         st.stop()
 
-    # --- NUEVO: CÁLCULO DE ANTIGÜEDAD DE LA ORDEN ---
+    # --- CÁLCULO DE ANTIGÜEDAD DE LA ORDEN ---
     df_filtrado[col_fecha] = pd.to_datetime(df_filtrado[col_fecha], errors='coerce')
     hoy = pd.Timestamp.today()
     df_filtrado['Dias_Pendiente'] = (hoy - df_filtrado[col_fecha]).dt.days.fillna(0).astype(int)
@@ -231,7 +231,6 @@ if uploaded_file is not None:
     st.markdown("#### 🚫 Selección de Viajes Específicos")
     df_filtrado.insert(0, "Incluir", True)
     
-    # --- ACTUALIZADO: MOSTRAMOS LA ANTIGÜEDAD EN LA TABLA ---
     df_seleccion_ordenes = st.data_editor(
         df_filtrado[['Incluir', 'Alerta_Fecha', col_orden, col_cliente, col_direccion, 'Zona de Venta']],
         column_config={
@@ -433,7 +432,7 @@ if uploaded_file is not None:
             'lat': lat,
             'lng': lng,
             'max_dias': max_dias,
-            'Forzar_Primera': False, # Nuevo campo para el VIP
+            'Forzar_Primera': False,
             'cant_ordenes': len(group),
             'detalles': detalles_ordenes,
             'indices_originales': group.index.tolist()
@@ -531,14 +530,12 @@ if uploaded_file is not None:
                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
 
-                # --- NUEVO: HACK MATEMÁTICO PARA FORZAR LA PRIMERA PARADA ---
+                # HACK MATEMÁTICO PARA FORZAR LA PRIMERA PARADA
                 priority_nodes = np.where(df_grupo['Forzar_Primera'] == True)[0]
                 if len(priority_nodes) > 0:
-                    # Si tildó varios para un mismo vehículo, toma el primero que encuentra
                     first_priority_node = int(priority_nodes[0]) + 1
                     solver = routing.solver()
                     start_index = routing.Start(0)
-                    # Le inyectamos una regla estricta a la IA: El nodo siguiente al origen DEBE ser el prioritario
                     solver.Add(routing.NextVar(start_index) == first_priority_node)
 
                 solution = routing.SolveWithParameters(search_parameters)
@@ -601,16 +598,16 @@ if uploaded_file is not None:
                     paso = 1
                     texto_paradas_wa = ""
                     
-                   for _, local in sub_df_ordenado.iterrows():
+                    # --- BUCLE DE ARMADO DE TEXTOS ---
+                    for _, local in sub_df_ordenado.iterrows():
                         texto_fantasia = f" ({local['nombre_fantasia']})" if str(local['nombre_fantasia']).strip() else ""
                         texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
                         texto_vip = " 🌟 *(Prioridad)*" if local['Forzar_Primera'] else ""
                         
-                        # Rescatamos el teléfono de la primera orden
                         tel_crudo = str(local['detalles'][0]['tel']).replace('.0', '').strip()
                         texto_tel_wa = f"📞 *Teléfono:* {tel_crudo}%0A" if tel_crudo and tel_crudo.lower() != 'nan' else ""
                         
-                        # --- 1. LO QUE SE VE EN LA PÁGINA WEB ---
+                        # 1. LO QUE SE VE EN LA PÁGINA WEB
                         st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}**")
                         st.caption(f"📍 {local['direccion']}")
                         if str(local['entre_calles']).strip():
@@ -618,10 +615,10 @@ if uploaded_file is not None:
                         if tel_crudo and tel_crudo.lower() != 'nan':
                             st.caption(f"📞 Teléfono: {tel_crudo}")
                         
-                        # --- 2. EL ENCABEZADO DEL MENSAJE DE WHATSAPP ---
+                        # 2. EL ENCABEZADO DEL MENSAJE DE WHATSAPP
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}{texto_tel_wa}"
 
-                        # --- 3. EL DETALLE DE LAS ÓRDENES ---
+                        # 3. EL DETALLE DE LAS ÓRDENES
                         for det in local['detalles']:
                             # Pantalla web
                             st.write(
