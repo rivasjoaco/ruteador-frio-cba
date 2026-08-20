@@ -131,7 +131,7 @@ if uploaded_file is not None:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-# Mapeo de columnas
+    # Mapeo de columnas
     col_orden = df.columns[0]      # Columna A
     col_cliente = df.columns[1]    # Columna B (Número de Cliente)
     col_direccion = df.columns[3]  # Columna D
@@ -144,6 +144,14 @@ if uploaded_file is not None:
 
     opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
     config_actual = CENTROS_CONFIG[opcion_region]
+
+    # --- NUEVO: ORIGEN PERSONALIZADO ---
+    st.markdown("#### 📍 Origen y Destino de la Flota")
+    origen_personalizado = st.text_input(
+        "Dirección de salida y regreso (Editable):", 
+        value=config_actual["depot_address"],
+        help="Si hoy los técnicos salen desde un punto distinto al depósito base, cambialo acá."
+    )
 
     codigos_centro = [str(c) for c in config_actual["codigos"]]
     df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
@@ -389,7 +397,6 @@ if uploaded_file is not None:
         dir_final = st.session_state.direcciones_editadas.get(dir_orig, dir_orig)
         cache_key = f"{dir_final}_{loc_map}"
         
-        # Corregido: Ahora lee coords_cache correctamente
         if cache_key in st.session_state.coords_cache:
             lat, lng, formatted_addr, _ = st.session_state.coords_cache[cache_key]
         else:
@@ -406,7 +413,7 @@ if uploaded_file is not None:
                 'puesto': str(row[col_puesto])
             })
         
-            grupos_locales.append({
+        grupos_locales.append({
             'direccion': formatted_addr,
             'cliente_principal': group[col_cliente].iloc[0],
             'nombre_fantasia': group['Nombre Fantasía'].iloc[0],
@@ -419,7 +426,6 @@ if uploaded_file is not None:
         })
 
     df_locales = pd.DataFrame(grupos_locales)
-    depot_lat, depot_lng = config_actual["depot_coords"]
 
     if cant_vehiculos > 1 and len(df_locales) >= cant_vehiculos:
         coords_matrix = df_locales[['lat', 'lng']].values
@@ -463,6 +469,21 @@ if uploaded_file is not None:
     st.divider()
     if st.button("⚡ Calcular Secuencias Óptimas y Despachar", type="primary"):
         with st.spinner("Trazando las rutas para los vehículos configurados..."):
+            
+            # --- VALIDAR ORIGEN PERSONALIZADO ---
+            if origen_personalizado.strip() == config_actual["depot_address"].strip():
+                depot_lat, depot_lng = config_actual["depot_coords"]
+                direccion_origen_final = config_actual["depot_address"]
+            else:
+                lat_or, lng_or, f_addr_or, exito_or = geocodificar_google(origen_personalizado, config_actual['provincia'])
+                if exito_or:
+                    depot_lat, depot_lng = lat_or, lng_or
+                    direccion_origen_final = f_addr_or
+                else:
+                    st.warning(f"⚠️ No se pudo ubicar el origen '{origen_personalizado}'. Se usará el depósito base.")
+                    depot_lat, depot_lng = config_actual["depot_coords"]
+                    direccion_origen_final = config_actual["depot_address"]
+            # ------------------------------------
             
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
@@ -518,7 +539,7 @@ if uploaded_file is not None:
 
             vehiculos_unicos = df_locales['Vehículo Asignado'].unique()
 
-            st.info(f"💡 **DESPACHO FINAL:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{config_actual['depot_address']}`.")
+            st.info(f"💡 **DESPACHO FINAL:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{direccion_origen_final}`.")
 
             cols = st.columns(len(vehiculos_unicos))
             
@@ -536,12 +557,12 @@ if uploaded_file is not None:
                     bloque = direcciones_ordenadas[i:i+tamano_bloque]
                     
                     if i == 0:
-                        origen_ruta = config_actual["depot_address"]
+                        origen_ruta = direccion_origen_final
                     else:
                         origen_ruta = direcciones_ordenadas[i-1]
                         
                     if i + tamano_bloque >= len(direcciones_ordenadas):
-                        destino_ruta = config_actual["depot_address"]
+                        destino_ruta = direccion_origen_final
                     else:
                         destino_ruta = bloque[-1]
                         bloque = bloque[:-1]
