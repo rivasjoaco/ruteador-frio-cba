@@ -131,16 +131,16 @@ if uploaded_file is not None:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Mapeo de columnas
-    col_orden = df.columns[0]
-    col_cliente = df.columns[2]
-    col_direccion = df.columns[3]
-    col_telefono = df.columns[5]
-    col_cp = df.columns[6]
-    col_texto_breve = df.columns[7]
-    col_puesto = df.columns[8]      
-    col_activo = df.columns[9]
-    col_centro = df.columns[10]
+# Mapeo de columnas
+    col_orden = df.columns[0]      # Columna A
+    col_cliente = df.columns[1]    # Columna B (Número de Cliente)
+    col_direccion = df.columns[3]  # Columna D
+    col_telefono = df.columns[5]   # Columna F
+    col_cp = df.columns[6]         # Columna G
+    col_texto_breve = df.columns[7]# Columna H
+    col_puesto = df.columns[8]     # Columna I
+    col_activo = df.columns[9]     # Columna J
+    col_centro = df.columns[10]    # Columna K
 
     opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
     config_actual = CENTROS_CONFIG[opcion_region]
