@@ -317,19 +317,39 @@ if uploaded_file is not None:
             d_actual = st.session_state.direcciones_editadas.get(d_orig, d_orig)
             cache_key = f"{d_actual}_{loc_map}"
 
-            if cache_key not in st.session_state.coords_cache:
+           if cache_key not in st.session_state.coords_cache:
                 # 1. Chequeamos si el maestro trajo coordenadas válidas
                 lat_m = row_dir['Latitud']
                 lng_m = row_dir['Longitud']
                 
                 if pd.notna(lat_m) and pd.notna(lng_m) and str(lat_m).strip() != "":
                     try:
-                        lat_val = float(str(lat_m).replace(',', '.'))
-                        lng_val = float(str(lng_m).replace(',', '.'))
+                        # --- NUEVO: FUNCIÓN PARA LIMPIAR Y REARMAR LAS COORDENADAS ROTAS ---
+                        def limpiar_coord(val):
+                            s = str(val).strip()
+                            # Borramos todos los puntos y cosas raras, dejamos solo números y el menos
+                            s = re.sub(r'[^\d-]', '', s)
+                            if not s or s == '-': return None
+                            # En Argentina siempre es negativo. Si le falta, se lo agregamos.
+                            if not s.startswith('-'): s = '-' + s
+                            # Clavamos el punto decimal exactamente después de los primeros 2 números
+                            if len(s) > 3:
+                                s = s[:3] + '.' + s[3:] 
+                            return float(s)
+                        
+                        # --- NUEVO: INVERTIMOS LAS COLUMNAS PORQUE EN EL EXCEL ESTÁN AL REVÉS ---
+                        lng_val = limpiar_coord(lat_m) # Tu columna 'Latitud' (-64) es la Longitud
+                        lat_val = limpiar_coord(lng_m) # Tu columna 'Longitud' (-31) es la Latitud
+                        
                         st.session_state.coords_cache[cache_key] = (lat_val, lng_val, f"{d_actual} (Base Maestra)", True)
                     except:
+                        # Si algo falla gravemente, va al Plan B
                         lat, lng, f_addr, exito = geocodificar_google(d_actual, loc_map)
                         st.session_state.coords_cache[cache_key] = (lat, lng, f_addr, exito)
+                else:
+                    # 2. Plan B: Google Maps
+                    lat, lng, f_addr, exito = geocodificar_google(d_actual, loc_map)
+                    st.session_state.coords_cache[cache_key] = (lat, lng, f_addr, exito)
                 else:
                     # 2. Plan B: Google Maps
                     lat, lng, f_addr, exito = geocodificar_google(d_actual, loc_map)
