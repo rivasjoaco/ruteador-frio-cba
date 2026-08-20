@@ -601,25 +601,34 @@ if uploaded_file is not None:
                     paso = 1
                     texto_paradas_wa = ""
                     
-                    for _, local in sub_df_ordenado.iterrows():
+                   for _, local in sub_df_ordenado.iterrows():
                         texto_fantasia = f" ({local['nombre_fantasia']})" if str(local['nombre_fantasia']).strip() else ""
                         texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
                         texto_vip = " 🌟 *(Prioridad)*" if local['Forzar_Primera'] else ""
                         
-                        # --- NUEVO: RESCATAMOS EL TELÉFONO DE LA ORDEN ---
+                        # Rescatamos el teléfono de la primera orden
                         tel_crudo = str(local['detalles'][0]['tel']).replace('.0', '').strip()
                         texto_tel_wa = f"📞 *Teléfono:* {tel_crudo}%0A" if tel_crudo and tel_crudo.lower() != 'nan' else ""
                         
+                        # --- 1. LO QUE SE VE EN LA PÁGINA WEB ---
                         st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}**")
                         st.caption(f"📍 {local['direccion']}")
+                        if str(local['entre_calles']).strip():
+                            st.caption(f"🛣️ Entre calles: {local['entre_calles']}")
                         if tel_crudo and tel_crudo.lower() != 'nan':
                             st.caption(f"📞 Teléfono: {tel_crudo}")
                         
+                        # --- 2. EL ENCABEZADO DEL MENSAJE DE WHATSAPP ---
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}{texto_tel_wa}"
-                        
-                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}"
 
+                        # --- 3. EL DETALLE DE LAS ÓRDENES ---
                         for det in local['detalles']:
+                            # Pantalla web
+                            st.write(
+                                f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}` | "
+                                f"Activo: `{det['activo']}` | Obs: `{det['obs']}`"
+                            )
+                            # Mensaje de WhatsApp
                             texto_paradas_wa += (
                                 f"   🔸 *Puesto:* {det['puesto']} | *Orden:* {det['orden']}%0A"
                                 f"   🔸 *Activo:* {det['activo']} | *Obs:* {det['obs']}%0A%0A"
