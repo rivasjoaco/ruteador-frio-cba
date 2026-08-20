@@ -188,13 +188,17 @@ if uploaded_file is not None:
             .str.zfill(9) 
         )
         
-        # Cruzamos las órdenes con los 66k clientes para traernos Zona, Lat y Lng
+        # Cruzamos las órdenes con los 66k clientes para traernos Zona, Lat, Lng, Fantasía y Calles
         df_filtrado = df_filtrado.merge(
-            DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud']],
+            DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Entre Calles']],
             left_on=col_cliente,
             right_on='Cliente',
             how='left'
         )
+        
+        # Limpiamos los espacios vacíos por si algún cliente no tiene cargado el Nombre o la Calle
+        df_filtrado['Nombre Fantasía'] = df_filtrado['Nombre Fantasía'].fillna('')
+        df_filtrado['Entre Calles'] = df_filtrado['Entre Calles'].fillna('')
     else:
         df_filtrado['Zona de Venta'] = "Sin Zona"
         df_filtrado['Latitud'] = np.nan
