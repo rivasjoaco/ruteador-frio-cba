@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import urllib.parse
 import re
+import unicodedata
 import googlemaps
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
@@ -74,10 +75,8 @@ def cargar_diccionario_cp():
             df_cp = df_cp.dropna(subset=['cp'])
             return dict(zip(df_cp['cp'], df_cp['ubicacion_google']))
         else:
-            st.warning("⚠️ El archivo CSV no tiene las columnas exactas (cp, localidad, provincia).")
             return {}
-    except Exception as e:
-        st.warning(f"⚠️ Error al leer codigos_postales.csv: {e}")
+    except Exception:
         return {}
 
 DICCIONARIO_CP = cargar_diccionario_cp()
@@ -132,20 +131,19 @@ if uploaded_file is not None:
     df.columns = [str(c).strip() for c in df.columns]
 
     # Mapeo de columnas
-    col_orden = df.columns[0]      # Columna A
-    col_cliente = df.columns[1]    # Columna B (Número de Cliente)
-    col_direccion = df.columns[3]  # Columna D
-    col_telefono = df.columns[5]   # Columna F
-    col_cp = df.columns[6]         # Columna G
-    col_texto_breve = df.columns[7]# Columna H
-    col_puesto = df.columns[8]     # Columna I
-    col_activo = df.columns[9]     # Columna J
-    col_centro = df.columns[10]    # Columna K
+    col_orden = df.columns[0]      # A
+    col_cliente = df.columns[1]    # B
+    col_direccion = df.columns[3]  # D (Calle)
+    col_telefono = df.columns[5]   # F
+    col_cp = df.columns[6]         # G
+    col_texto_breve = df.columns[7]# H
+    col_puesto = df.columns[8]     # I
+    col_activo = df.columns[9]     # J
+    col_centro = df.columns[10]    # K
 
     opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
     config_actual = CENTROS_CONFIG[opcion_region]
 
-    # --- NUEVO: ORIGEN PERSONALIZADO ---
     st.markdown("#### 📍 Origen y Destino de la Flota")
     origen_personalizado = st.text_input(
         "Dirección de salida y regreso (Editable):", 
@@ -157,27 +155,11 @@ if uploaded_file is not None:
     df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
 
     if df_filtrado.empty:
-        st.warning(f"⚠️ No se encontraron órdenes correspondientes a {opcion_region} en este archivo.")
+        st.warning(f"⚠️ No se encontraron órdenes correspondientes a {opcion_region}.")
         st.stop()
 
-    st.success(f"📊 Se encontraron **{len(df_filtrado)} órdenes en total** asociadas a **{opcion_region}**.")
-
     # ==========================================
-    # ALERTA DE CÓDIGOS POSTALES FALTANTES
-    # ==========================================
-    cps_en_ordenes = df_filtrado[col_cp].apply(lambda x: str(x).replace('.0', '').strip() if pd.notna(x) else "").unique()
-    cps_faltantes = [cp for cp in cps_en_ordenes if cp and cp not in DICCIONARIO_CP]
-
-    if cps_faltantes:
-        st.warning(
-            f"🚨 **¡ALERTA DE CÓDIGOS POSTALES NO REGISTRADOS!**\n\n"
-            f"Faltan estos CPs en tu archivo maestro: {', '.join(cps_faltantes)}\n\n"
-            f"⚠️ *El sistema intentará ubicarlos igual, pero agregalos a tu CSV para la próxima.*"
-        )
-        st.divider()
-
-    # ==========================================
-    # CRUCE CON BASE MAESTRA
+    # CRUCE CON BASE MAESTRA Y DIRECCIÓN
     # ==========================================
     if not DF_MAESTRO.empty and 'Cliente' in DF_MAESTRO.columns:
         df_filtrado[col_cliente] = (
@@ -195,8 +177,9 @@ if uploaded_file is not None:
             .str.zfill(9) 
         )
         
+        # CRUZAMOS Y TRAEMOS LA COLUMNA F DEL MAESTRO ("Dirección")
         df_filtrado = df_filtrado.merge(
-            DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Entre Calles']],
+            DF_MAESTRO[['Cliente', 'Zona de Venta', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Entre Calles', 'Dirección']],
             left_on=col_cliente,
             right_on='Cliente',
             how='left'
@@ -204,10 +187,12 @@ if uploaded_file is not None:
         
         df_filtrado['Nombre Fantasía'] = df_filtrado['Nombre Fantasía'].fillna('')
         df_filtrado['Entre Calles'] = df_filtrado['Entre Calles'].fillna('')
+        df_filtrado['Direccion_Maestro'] = df_filtrado['Dirección'].fillna('')
     else:
         df_filtrado['Zona de Venta'] = "Sin Zona"
         df_filtrado['Latitud'] = np.nan
         df_filtrado['Longitud'] = np.nan
+        df_filtrado['Direccion_Maestro'] = ""
 
     df_filtrado['Zona de Venta'] = df_filtrado['Zona de Venta'].fillna('ZONA DESCONOCIDA')
 
@@ -218,7 +203,7 @@ if uploaded_file is not None:
     df_filtrado['Localidad_Mapeada'] = df_filtrado[col_cp].apply(obtener_localidad)
 
     # ==========================================
-    # FILTRO OPERATIVO (ZONAS DE VENTA)
+    # FILTRO OPERATIVO Y MANUAL
     # ==========================================
     st.divider()
     st.markdown("### 🌍 Filtro Operativo (Zonas de Venta)")
@@ -231,16 +216,11 @@ if uploaded_file is not None:
     )
     
     if not zonas_seleccionadas:
-        st.info("👆 Seleccioná al menos una Zona de Venta para continuar.")
         st.stop()
         
     df_filtrado = df_filtrado[df_filtrado['Zona de Venta'].isin(zonas_seleccionadas)].copy()
 
-    # ==========================================
-    # FILTRO MANUAL ORDEN POR ORDEN
-    # ==========================================
     st.markdown("#### 🚫 Selección de Viajes Específicos")
-    st.caption("Destildá las órdenes puntuales que **NO** quieras procesar hoy.")
     df_filtrado.insert(0, "Incluir", True)
     
     df_seleccion_ordenes = st.data_editor(
@@ -261,20 +241,21 @@ if uploaded_file is not None:
     df_filtrado = df_filtrado[df_filtrado[col_orden].isin(ordenes_seleccionadas)].copy()
     
     if df_filtrado.empty:
-        st.warning("⚠️ No dejaste ninguna orden seleccionada.")
         st.stop()
 
+    # --- LIMPIEZA AVANZADA CON ELIMINACIÓN DE TILDES ---
     def limpiar_direccion(dir_raw):
         if pd.isna(dir_raw): return ""
         dir_str = str(dir_raw).replace('\n', ' ').replace('\r', ' ').strip().upper()
+        dir_str = ''.join(c for c in unicodedata.normalize('NFD', dir_str) if unicodedata.category(c) != 'Mn')
         dir_str = re.sub(r'\b0+(\d+)', r'\1', dir_str)
         dir_str = dir_str.replace('.', ' ').replace(',', ' ').replace('-', ' ')
         dir_str = re.sub(r'\b(PISO|PB|DPTO|DPT|DEPTO|OFICINA|OF|LOTE|MZ|MANZANA|LOCAL|BARRIO|B°|B )\b.*', '', dir_str)
         return re.sub(r'\s+', ' ', dir_str).strip()
 
     df_filtrado['direccion_limpia'] = df_filtrado[col_direccion].apply(limpiar_direccion)
+    df_filtrado['dir_maestro_limpia'] = df_filtrado['Direccion_Maestro'].apply(limpiar_direccion)
 
-    # Google Maps ahora solo se usa para validar el Depósito Base Personalizado
     def geocodificar_google(dir_texto, ubicacion_geografica):
         query_principal = f"{dir_texto}, {ubicacion_geografica}, Argentina"
         try:
@@ -290,71 +271,107 @@ if uploaded_file is not None:
     if "direcciones_descartadas" not in st.session_state: st.session_state.direcciones_descartadas = set()
 
     # ==========================================
-    # VALIDACIÓN DE COORDENADAS (ESTRICTA: SOLO MAESTRO)
+    # VALIDACIÓN DE COORDENADAS ESTRICTA + CONTROL DE SUCURSALES
     # ==========================================
     st.divider()
-    st.markdown("### 🔍 Validación de Coordenadas (Modo Estricto)")
+    c_tit, c_btn = st.columns([3, 1])
+    c_tit.markdown("### 🔍 Validación de Coordenadas (Modo Estricto)")
+    if c_btn.button("🧹 Limpiar Memoria"):
+        st.session_state.coords_cache = {}
+        st.rerun()
 
-    direcciones_unicas = df_filtrado[['direccion_limpia', 'Localidad_Mapeada', 'Latitud', 'Longitud', col_cliente]].drop_duplicates(subset=[col_cliente])
+    # Ahora buscamos valores únicos combinando Cliente + Dirección real
+    direcciones_unicas = df_filtrado[['direccion_limpia', 'dir_maestro_limpia', 'Localidad_Mapeada', 'Latitud', 'Longitud', col_cliente]].drop_duplicates(subset=[col_cliente, 'direccion_limpia'])
     no_encontradas = []
 
-    with st.spinner("Buscando coordenadas exactas en Base Maestra..."):
+    with st.spinner("Buscando y comparando sucursales con Base Maestra..."):
         for _, row_dir in direcciones_unicas.iterrows():
             d_orig = row_dir['direccion_limpia']
+            d_maestro = row_dir['dir_maestro_limpia']
             loc_map = row_dir['Localidad_Mapeada']
             c_id = row_dir[col_cliente]
             
             if d_orig in st.session_state.direcciones_descartadas: continue
             
-            # Usamos el cliente como clave única
-            cache_key = f"{c_id}"
+            # La clave ahora respeta las múltiples sucursales
+            cache_key = f"{c_id}_{d_orig}"
 
             if cache_key not in st.session_state.coords_cache:
                 lat_m = row_dir['Latitud']
                 lng_m = row_dir['Longitud']
                 exito = False
+                motivo_error = "Faltan coordenadas en el Maestro"
+
+                # LÓGICA DE SUCURSALES: Comparar textos de dirección
+                es_casa_central = False
+                if d_orig == d_maestro:
+                    es_casa_central = True
+                else:
+                    pal_orig = [p for p in d_orig.split() if len(p) > 2 and not p.isdigit()]
+                    pal_mae = [p for p in d_maestro.split() if len(p) > 2 and not p.isdigit()]
+                    # Si al menos comparten la calle principal, le damos el visto bueno
+                    if pal_orig and pal_mae and pal_orig[0] == pal_mae[0]:
+                        es_casa_central = True
                 
-                if pd.notna(lat_m) and pd.notna(lng_m) and str(lat_m).strip() != "":
-                    try:
-                        def limpiar_coord(val):
-                            s = str(val).strip()
-                            s = re.sub(r'[^\d-]', '', s)
-                            if not s or s == '-': return None
-                            if not s.startswith('-'): s = '-' + s
-                            if len(s) > 3: s = s[:3] + '.' + s[3:] 
-                            return float(s)
-                        
-                        lng_val = limpiar_coord(lat_m) # Invertido a propósito
-                        lat_val = limpiar_coord(lng_m) # Invertido a propósito
-                        
-                        st.session_state.coords_cache[cache_key] = (lat_val, lng_val, f"{d_orig} (Base Maestra)", True)
-                        exito = True
-                    except:
-                        pass
-                
+                # Si no hay calle en el maestro, asumimos que sirve
+                if not d_maestro: es_casa_central = True
+
+                if es_casa_central:
+                    if pd.notna(lat_m) and pd.notna(lng_m) and str(lat_m).strip() != "":
+                        try:
+                            def limpiar_coord(val):
+                                s = str(val).strip()
+                                s = re.sub(r'[^\d-]', '', s)
+                                if not s or s == '-': return None
+                                if not s.startswith('-'): s = '-' + s
+                                if len(s) > 3: s = s[:3] + '.' + s[3:] 
+                                return float(s)
+                            
+                            lng_val = limpiar_coord(lat_m)
+                            lat_val = limpiar_coord(lng_m)
+                            
+                            st.session_state.coords_cache[cache_key] = (lat_val, lng_val, f"{d_orig} (Base Maestra)", True)
+                            exito = True
+                        except:
+                            motivo_error = "Error al leer lat/lng del Maestro"
+                else:
+                    motivo_error = f"Sucursal Diferente (Maestro indica: '{d_maestro}')"
+
                 if not exito:
-                    st.session_state.coords_cache[cache_key] = (0, 0, "Falta Coordenada", False)
+                    st.session_state.coords_cache[cache_key] = (0, 0, motivo_error, False)
             
-            lat, lng, f_addr, exito = st.session_state.coords_cache[cache_key]
-            if not exito: no_encontradas.append((d_orig, c_id))
+            lat, lng, msg, exito = st.session_state.coords_cache[cache_key]
+            if not exito: no_encontradas.append((d_orig, c_id, msg, loc_map, cache_key))
 
     df_filtrado_activo = df_filtrado[~df_filtrado['direccion_limpia'].isin(st.session_state.direcciones_descartadas)].copy()
 
+    # --- PANEL DE EMERGENCIAS (SUCURSALES Y FALTANTES) ---
     if no_encontradas:
-        st.error(f"🚨 **¡FALTAN DATOS!** Hay **{len(no_encontradas)} cliente(s)** sin coordenadas válidas en tu maestro:")
-        st.info("💡 **Acción requerida:** Descartá estos clientes para poder despachar el resto de la flota. Luego, actualizá tu Excel en GitHub.")
-        for d_orig, c_id in no_encontradas:
+        st.error(f"🚨 **¡ATENCIÓN!** Hay **{len(no_encontradas)} cliente(s)** con conflictos (Sin coordenadas o Sucursales Nuevas):")
+        st.info("💡 **Acción requerida:** Podés autorizar a buscar la sucursal en Google Maps o descartar la orden.")
+        for d_orig, c_id, msg, loc_map, c_key in no_encontradas:
             with st.container():
-                c1, c2 = st.columns([4, 1])
+                c1, c2, c3 = st.columns([3, 1, 1])
                 with c1: 
-                    st.warning(f"🛑 Cliente Nº **{c_id}** - {d_orig}")
+                    st.warning(f"🛑 Cliente Nº **{c_id}** - Dirección: `{d_orig}`\n\n*Motivo:* {msg}")
                 with c2:
+                    st.write(" ")
+                    if st.button("🔍 Forzar Google Maps", key=f"google_{c_key}"):
+                        lat, lng, f_addr, ok = geocodificar_google(d_orig, loc_map)
+                        if ok:
+                            st.session_state.coords_cache[c_key] = (lat, lng, f_addr, True)
+                        else:
+                            st.session_state.coords_cache[c_key] = (lat, lng, "Google no lo encontró", False)
+                        st.rerun()
+                with c3:
+                    st.write(" ")
                     if st.button("❌ Descartar", key=f"discard_{d_orig}"):
                         st.session_state.direcciones_descartadas.add(d_orig)
                         st.rerun()
-        st.stop() # FRENA LA APP ACÁ SI HAY ERRORES
+                st.write("---")
+        st.stop() # FRENA LA APP HASTA QUE SE RESUELVA EL CONFLICTO
     else:
-        st.success("✅ ¡El 100% de las ubicaciones fueron validadas contra la Base Maestra!")
+        st.success("✅ ¡El 100% de las ubicaciones fueron validadas y analizadas!")
 
     # ==========================================
     # PLANIFICACIÓN DE FLOTA (VEHÍCULOS)
@@ -362,8 +379,8 @@ if uploaded_file is not None:
     st.divider()
     st.markdown("### 🚗 Planificación de Flota")
     
-    # Contamos clientes únicos en lugar de direcciones
-    total_direcciones_unicas = len(df_filtrado_activo[col_cliente].unique())
+    # Contamos paradas físicas reales
+    total_direcciones_unicas = len(df_filtrado_activo[['direccion_limpia', col_cliente]].drop_duplicates())
     
     sug_vehiculos = 1
     if total_direcciones_unicas > 8: sug_vehiculos = 2
@@ -375,24 +392,19 @@ if uploaded_file is not None:
             "Seleccioná la cantidad de vehículos para esta ruta:",
             min_value=1,
             max_value=10,
-            value=sug_vehiculos,
-            help="El sistema agrupará los locales automáticamente en la cantidad de vehículos que elijas."
+            value=sug_vehiculos
         )
     with col_v2:
-        st.info(f"💡 **Sugerencia:** Para **{total_direcciones_unicas} clientes**, recomendamos despachar **{sug_vehiculos} vehículo(s)**.")
+        st.info(f"💡 **Sugerencia:** Para **{total_direcciones_unicas} paradas**, recomendamos despachar **{sug_vehiculos} vehículo(s)**.")
 
     if df_filtrado_activo.empty:
-        st.error("No hay clientes válidos para procesar el ruteo.")
         st.stop()
 
-    # --- 1. AGRUPACIÓN AUTOMÁTICA (K-MEANS) POR CLIENTE ---
+    # --- 1. AGRUPACIÓN AUTOMÁTICA (POR SUCURSAL EXACTA) ---
     grupos_locales = []
     
-    # Agrupamos por Nº de Cliente para fusionar órdenes del mismo lugar sin error de texto
-    for cliente_id, group in df_filtrado_activo.groupby(col_cliente):
-        dir_orig = group['direccion_limpia'].iloc[0]
-        
-        cache_key = f"{cliente_id}"
+    for (cliente_id, dir_orig), group in df_filtrado_activo.groupby([col_cliente, 'direccion_limpia']):
+        cache_key = f"{cliente_id}_{dir_orig}"
         
         if cache_key in st.session_state.coords_cache:
             lat, lng, formatted_addr, _ = st.session_state.coords_cache[cache_key]
@@ -435,8 +447,6 @@ if uploaded_file is not None:
 
     # --- 2. TABLA INTERACTIVA DE AJUSTE MANUAL ---
     st.markdown("#### 🔀 Revisión y Ajuste de Zonas")
-    st.caption("El algoritmo agrupa matemáticamente por cercanía. Si querés forzar un cambio, **hacé clic en la columna 'Vehículo Asignado' y modificalo a tu gusto** antes de calcular las rutas.")
-
     opciones_vehiculos = [f"Vehículo {i+1}" for i in range(cant_vehiculos)]
     
     df_para_editar = df_locales[['cliente_principal', 'nombre_fantasia', 'direccion', 'cant_ordenes', 'Vehículo Asignado']].copy()
@@ -449,11 +459,7 @@ if uploaded_file is not None:
             "direccion": st.column_config.TextColumn("Ubicación", disabled=True),
             "cant_ordenes": st.column_config.NumberColumn("Órdenes", disabled=True),
             "Vehículo Asignado": st.column_config.SelectboxColumn(
-                "Vehículo Asignado (Editable)", 
-                help="Clickeá para asignar este cliente a otro vehículo",
-                width="medium",
-                options=opciones_vehiculos, 
-                required=True
+                "Vehículo Asignado", options=opciones_vehiculos, required=True
             )
         },
         hide_index=True,
@@ -463,12 +469,11 @@ if uploaded_file is not None:
 
     df_locales['Vehículo Asignado'] = df_editado['Vehículo Asignado']
 
-    # --- 3. BOTÓN FINAL: OPTIMIZAR SECUENCIA (OR-TOOLS) ---
+    # --- 3. BOTÓN FINAL ---
     st.divider()
     if st.button("⚡ Calcular Secuencias Óptimas y Despachar", type="primary"):
         with st.spinner("Trazando las rutas para los vehículos configurados..."):
             
-            # --- VALIDAR ORIGEN PERSONALIZADO ---
             if origen_personalizado.strip() == config_actual["depot_address"].strip():
                 depot_lat, depot_lng = config_actual["depot_coords"]
                 direccion_origen_final = config_actual["depot_address"]
@@ -478,10 +483,8 @@ if uploaded_file is not None:
                     depot_lat, depot_lng = lat_or, lng_or
                     direccion_origen_final = f_addr_or
                 else:
-                    st.warning(f"⚠️ No se pudo ubicar el origen '{origen_personalizado}'. Se usará el depósito base.")
                     depot_lat, depot_lng = config_actual["depot_coords"]
                     direccion_origen_final = config_actual["depot_address"]
-            # ------------------------------------
             
             def optimizar_secuencia_grupo(df_grupo):
                 coords_grupo = [(depot_lat, depot_lng)]
@@ -502,8 +505,7 @@ if uploaded_file is not None:
                             dlat, dlon = lat2 - lat1, lon2 - lon1
                             a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
                             c = 2 * np.arcsin(np.sqrt(a))
-                            dist_meters = int(c * 6371000 * 1.35)
-                            row_dist.append(dist_meters)
+                            row_dist.append(int(c * 6371000 * 1.35))
                     dist_matrix.append(row_dist)
 
                 manager = pywrapcp.RoutingIndexManager(n_locs, 1, 0)
@@ -536,17 +538,12 @@ if uploaded_file is not None:
                 return df_grupo.iloc[secuencia_indices].copy(), distancia_total / 1000.0
 
             vehiculos_unicos = df_locales['Vehículo Asignado'].unique()
-
-            st.info(f"💡 **DESPACHO FINAL:** Se asignaron **{len(vehiculos_unicos)} VEHÍCULO(S)** saliendo de `{direccion_origen_final}`.")
-
             cols = st.columns(len(vehiculos_unicos))
             
             for idx_col, v_nombre in enumerate(sorted(vehiculos_unicos)):
                 grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
-                
                 sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
-                # --- NUEVO: ORIGEN/DESTINO EN TEXTO, PARADAS EN COORDENADAS ---
                 coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
                 
                 rutas_links = []
@@ -555,13 +552,11 @@ if uploaded_file is not None:
                 for i in range(0, len(coords_ordenadas), tamano_bloque):
                     bloque_coords = coords_ordenadas[i:i+tamano_bloque]
                     
-                    # Si es el primer tramo, sale desde la dirección de origen (texto)
                     if i == 0:
                         origen_ruta = direccion_origen_final
                     else:
                         origen_ruta = coords_ordenadas[i-1]
                         
-                    # Si es el último tramo, vuelve a la dirección de destino (texto)
                     if i + tamano_bloque >= len(coords_ordenadas):
                         destino_ruta = direccion_origen_final
                     else:
@@ -583,77 +578,54 @@ if uploaded_file is not None:
                     st.metric("Recorrido Est.", f"{km_v:.1f} km")
                     st.metric("Jornada Est.", f"{tiempo_est:.1f} hs")
 
-                    st.markdown("**Secuencia Óptima de Paradas:**")
+                    st.markdown("**Secuencia Óptima:**")
                     paso = 1
                     texto_paradas_wa = ""
                     
                     for _, local in sub_df_ordenado.iterrows():
-                        cant_ord = local['cant_ordenes']
-                        
                         texto_fantasia = f" ({local['nombre_fantasia']})" if str(local['nombre_fantasia']).strip() else ""
                         texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
                         
                         st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}**")
                         st.caption(f"📍 {local['direccion']}")
-                        if str(local['entre_calles']).strip():
-                            st.caption(f"🛣️ Entre calles: {local['entre_calles']}")
                         
-                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}*%0A"
-                        texto_paradas_wa += f"📍 {local['direccion']}%0A"
-                        texto_paradas_wa += texto_entre
+                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}*%0A📍 {local['direccion']}%0A{texto_entre}"
 
                         for det in local['detalles']:
-                            st.write(
-                                f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}` | "
-                                f"Activo: `{det['activo']}` | Obs: `{det['obs']}`"
-                            )
-                            
                             texto_paradas_wa += (
-                                f"   🔸 *Puesto de trabajo:* {det['puesto']}%0A"
-                                f"   🔸 *N° Orden:* {det['orden']}%0A"
-                                f"   🔸 *Activo Fijo:* {det['activo']}%0A"
-                                f"   🔸 *Observación:* {det['obs']}%0A%0A"
+                                f"   🔸 *Puesto:* {det['puesto']} | *Orden:* {det['orden']}%0A"
+                                f"   🔸 *Activo:* {det['activo']} | *Obs:* {det['obs']}%0A%0A"
                             )
 
                         for orig_idx in local['indices_originales']:
                             df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
-                            df.loc[orig_idx, 'Estado'] = 'En Ruta'
                             df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
 
                         st.write("---")
                         paso += 1
 
                     for idx_link, link_ruta in enumerate(rutas_links):
-                        nombre_boton = "🗺️ Abrir Hoja de Ruta Completa" if len(rutas_links) == 1 else f"🗺️ Abrir Ruta (Parte {idx_link + 1})"
-                        st.link_button(nombre_boton, link_ruta)
+                        st.link_button(f"🗺️ Abrir Ruta (Parte {idx_link + 1})" if len(rutas_links)>1 else "🗺️ Abrir Hoja de Ruta", link_ruta)
                     
-                    texto_links_wa = ""
-                    if len(rutas_links) == 1:
-                        texto_links_wa = f"🔗 *Link de Ruta Google Maps:*%0A{urllib.parse.quote(rutas_links[0])}"
-                    else:
-                        texto_links_wa = "🔗 *Links de Ruta (Dividida por límite de Google Maps):*%0A"
-                        for idx_link, link_ruta in enumerate(rutas_links):
-                            texto_links_wa += f"📍 *Parte {idx_link + 1}:*%0A{urllib.parse.quote(link_ruta)}%0A%0A"
+                    texto_links_wa = "🔗 *Link(s) de Ruta:*%0A"
+                    for link_ruta in rutas_links:
+                        texto_links_wa += f"{urllib.parse.quote(link_ruta)}%0A%0A"
                     
                     msg_wa = (
                         f"🚚 *HOJA DE RUTA - {v_nombre.upper()}*%0A"
-                        f"📊 *Ubicaciones a Visitar:* {len(sub_df_ordenado)} puntos%0A"
+                        f"📊 *Visitas:* {len(sub_df_ordenado)} puntos%0A"
                         f"----------------------------------------%0A"
-                        f"📋 *DETALLE DE PUNTOS Y ACTIVOS:*%0A"
-                        f"{texto_paradas_wa}"
-                        f"----------------------------------------%0A"
-                        f"{texto_links_wa}"
+                        f"📋 *DETALLE:*%0A{texto_paradas_wa}"
+                        f"----------------------------------------%0A{texto_links_wa}"
                     )
-                    
                     st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
 
             st.divider()
             output_name = "ordenes_despachadas.xlsx"
             df.to_excel(output_name, index=False)
-            
             with open(output_name, "rb") as file:
                 st.download_button(
-                    label="📥 Descargar Excel con Asignaciones y Links",
+                    label="📥 Descargar Excel Final",
                     data=file,
                     file_name="ordenes_despachadas.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
