@@ -546,9 +546,8 @@ if uploaded_file is not None:
                 
                 sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
-                # --- NUEVO: LINK DE GOOGLE MAPS BASADO 100% EN COORDENADAS ---
+                # --- NUEVO: ORIGEN/DESTINO EN TEXTO, PARADAS EN COORDENADAS ---
                 coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
-                origen_coords = f"{depot_lat},{depot_lng}"
                 
                 rutas_links = []
                 tamano_bloque = 9
@@ -556,13 +555,15 @@ if uploaded_file is not None:
                 for i in range(0, len(coords_ordenadas), tamano_bloque):
                     bloque_coords = coords_ordenadas[i:i+tamano_bloque]
                     
+                    # Si es el primer tramo, sale desde la dirección de origen (texto)
                     if i == 0:
-                        origen_ruta = origen_coords
+                        origen_ruta = direccion_origen_final
                     else:
                         origen_ruta = coords_ordenadas[i-1]
                         
+                    # Si es el último tramo, vuelve a la dirección de destino (texto)
                     if i + tamano_bloque >= len(coords_ordenadas):
-                        destino_ruta = origen_coords
+                        destino_ruta = direccion_origen_final
                     else:
                         destino_ruta = bloque_coords[-1]
                         bloque_coords = bloque_coords[:-1]
