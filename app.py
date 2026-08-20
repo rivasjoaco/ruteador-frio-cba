@@ -564,26 +564,28 @@ if uploaded_file is not None:
                 
                 sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                 
-                direcciones_ordenadas = sub_df_ordenado['direccion'].tolist()
+               # --- NUEVO: USAMOS COORDENADAS EXACTAS PARA EL LINK DE MAPS ---
+                coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
+                origen_coords = f"{depot_lat},{depot_lng}"
                 
                 rutas_links = []
                 tamano_bloque = 9
                 
-                for i in range(0, len(direcciones_ordenadas), tamano_bloque):
-                    bloque = direcciones_ordenadas[i:i+tamano_bloque]
+                for i in range(0, len(coords_ordenadas), tamano_bloque):
+                    bloque_coords = coords_ordenadas[i:i+tamano_bloque]
                     
                     if i == 0:
-                        origen_ruta = direccion_origen_final
+                        origen_ruta = origen_coords
                     else:
-                        origen_ruta = direcciones_ordenadas[i-1]
+                        origen_ruta = coords_ordenadas[i-1]
                         
-                    if i + tamano_bloque >= len(direcciones_ordenadas):
-                        destino_ruta = direccion_origen_final
+                    if i + tamano_bloque >= len(coords_ordenadas):
+                        destino_ruta = origen_coords
                     else:
-                        destino_ruta = bloque[-1]
-                        bloque = bloque[:-1]
+                        destino_ruta = bloque_coords[-1]
+                        bloque_coords = bloque_coords[:-1]
                         
-                    waypoints_str = "|".join([urllib.parse.quote(d) for d in bloque])
+                    waypoints_str = "|".join([urllib.parse.quote(c) for c in bloque_coords])
                     origen_enc = urllib.parse.quote(origen_ruta)
                     destino_enc = urllib.parse.quote(destino_ruta)
                     
