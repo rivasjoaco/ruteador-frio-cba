@@ -568,11 +568,20 @@ if uploaded_file is not None:
                     for _, local in sub_df_ordenado.iterrows():
                         cant_ord = local['cant_ordenes']
                         
-                        st.markdown(f"**{paso}. {local['cliente_principal']}**")
-                        st.caption(f"📍 {local['direccion']}")
+                        # Validamos que no estén vacíos para no mandar guiones raros
+                        texto_fantasia = f" ({local['nombre_fantasia']})" if str(local['nombre_fantasia']).strip() else ""
+                        texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
                         
-                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}*%0A"
+                        # Esto lo muestra en la pantalla web
+                        st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}**")
+                        st.caption(f"📍 {local['direccion']}")
+                        if str(local['entre_calles']).strip():
+                            st.caption(f"🛣️ Entre calles: {local['entre_calles']}")
+                        
+                        # Esto lo mete en el link de WhatsApp
+                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}*%0A"
                         texto_paradas_wa += f"📍 {local['direccion']}%0A"
+                        texto_paradas_wa += texto_entre
 
                         for det in local['detalles']:
                             st.write(
