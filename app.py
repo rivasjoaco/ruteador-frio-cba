@@ -606,8 +606,16 @@ if uploaded_file is not None:
                         texto_entre = f"🛣️ *Entre calles:* {local['entre_calles']}%0A" if str(local['entre_calles']).strip() else ""
                         texto_vip = " 🌟 *(Prioridad)*" if local['Forzar_Primera'] else ""
                         
+                        # --- NUEVO: RESCATAMOS EL TELÉFONO DE LA ORDEN ---
+                        tel_crudo = str(local['detalles'][0]['tel']).replace('.0', '').strip()
+                        texto_tel_wa = f"📞 *Teléfono:* {tel_crudo}%0A" if tel_crudo and tel_crudo.lower() != 'nan' else ""
+                        
                         st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}**")
                         st.caption(f"📍 {local['direccion']}")
+                        if tel_crudo and tel_crudo.lower() != 'nan':
+                            st.caption(f"📞 Teléfono: {tel_crudo}")
+                        
+                        texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}{texto_tel_wa}"
                         
                         texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}"
 
