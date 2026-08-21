@@ -154,16 +154,16 @@ with tab1:
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip() for c in df.columns]
 
-            col_orden = df.columns[0]      # A
-            col_cliente = df.columns[1]    # B
-            col_direccion = df.columns[3]  # D
-            col_telefono = df.columns[5]   # F
-            col_cp = df.columns[6]         # G
-            col_texto_breve = df.columns[7]# H
-            col_puesto = df.columns[8]     # I
-            col_activo = df.columns[9]     # J
-            col_centro = df.columns[10]    # K
-            col_fecha = df.columns[11]     # L
+            col_orden = df.columns[0]      
+            col_cliente = df.columns[1]    
+            col_direccion = df.columns[3]  
+            col_telefono = df.columns[5]   
+            col_cp = df.columns[6]         
+            col_texto_breve = df.columns[7]
+            col_puesto = df.columns[8]     
+            col_activo = df.columns[9]     
+            col_centro = df.columns[10]    
+            col_fecha = df.columns[11]     
 
             codigos_centro = [str(c) for c in config_actual["codigos"]]
             df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
@@ -432,13 +432,12 @@ with tab1:
                                         grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
                                         sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                                         
-                                        # --- SOLUCIÓN DE LINKS (Cadena matemática de Waypoints) ---
                                         coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
                                         origen_str = f"{depot_lat},{depot_lng}"
                                         todas_coords = [origen_str] + coords_ordenadas + [origen_str]
                                         
                                         rutas_links = []
-                                        step = 10 # Hasta 9 paradas intermedias
+                                        step = 10 
                                         
                                         for i in range(0, len(todas_coords) - 1, step):
                                             chunk = todas_coords[i:i+step+1]
@@ -504,14 +503,13 @@ with tab1:
 with tab2:
     st.markdown("### 📅 Planificador de Visitas Masivas")
     
-    # NUEVAS CAJAS DE TEXTO PARA SALIDA Y LLEGADA
     col_origen, col_destino = st.columns(2)
     with col_origen:
         origen_tab2 = st.text_input("📍 Dirección de Salida (Inicio):", value=config_actual["depot_address"], key="origen_t2")
     with col_destino:
         destino_tab2 = st.text_input("🏁 Dirección de Llegada (Fin):", value=config_actual["depot_address"], key="destino_t2")
 
-    st.info("Pegá un listado de N° de Clientes y el sistema los agrupará geográficamente por día usando la información de la Base Maestra.")
+    st.info("Pegá un listado de N° de Clientes y el sistema trazará una ruta geográficamente óptima dividiéndola EXACTAMENTE en la cantidad de clientes por día que elijas.")
     
     col_input1, col_input2 = st.columns([3, 1])
     
@@ -522,7 +520,7 @@ with tab2:
             placeholder="Ejemplo:\n501159189\n501159190\n501159191"
         )
     with col_input2:
-        clientes_por_dia = st.number_input("Clientes por día (máx):", min_value=1, max_value=50, value=15)
+        clientes_por_dia = st.number_input("Clientes por día (Máximo exacto):", min_value=1, max_value=50, value=15)
         btn_planificar = st.button("🚀 Generar Planificación", type="primary", use_container_width=True)
         
     if btn_planificar and clientes_input:
@@ -532,9 +530,7 @@ with tab2:
             raw_clients = re.split(r'[\s,]+', clientes_input.strip())
             clean_clients = [str(c).replace('.0', '').strip().zfill(9) for c in raw_clients if c]
             
-            # Traemos las columnas exactas solicitadas del Maestro
             columnas_maestro = DF_MAESTRO.columns.tolist()
-            
             cols_a_traer = ['Cliente', 'Latitud', 'Longitud', 'Dirección', 'Entre Calles']
             if 'Razón Social' in columnas_maestro: cols_a_traer.append('Razón Social')
             if 'Nombre Fantasía' in columnas_maestro: cols_a_traer.append('Nombre Fantasía')
@@ -549,7 +545,7 @@ with tab2:
                 st.warning(f"⚠️ **{len(clientes_faltantes)} clientes no encontrados en el Maestro:** " + ", ".join(clientes_faltantes))
             
             if not df_plan.empty:
-                with st.spinner("Agrupando geográficamente y trazando rutas..."):
+                with st.spinner("Trazando ruta maestra y dividiendo por días..."):
                     def limpiar_coord_multi(val):
                         s = str(val).strip()
                         s = re.sub(r'[^\d-]', '', s)
@@ -565,69 +561,59 @@ with tab2:
                     if df_plan.empty:
                         st.error("Ninguno de los clientes encontrados tiene coordenadas válidas.")
                     else:
-                        total_clientes = len(df_plan)
-                        num_dias = math.ceil(total_clientes / clientes_por_dia)
-                        
-                        st.success(f"✅ Se planificarán **{total_clientes} clientes** distribuidos en **{num_dias} día(s)**.")
-                        
-                        if num_dias > 1:
-                            coords_matrix = df_plan[['lat', 'lng']].values
-                            kmeans = KMeans(n_clusters=num_dias, random_state=42, n_init=10).fit(coords_matrix)
-                            df_plan['Dia_Cluster'] = kmeans.labels_
-                        else:
-                            df_plan['Dia_Cluster'] = 0
-                            
-                        st.divider()
-                        
-                        # Ubicaciones de Inicio y Fin Manuales
                         lat_or, lng_or, f_addr_or, exito_or = geocodificar_google(origen_tab2, config_actual['provincia'])
                         lat_dest, lng_dest, f_addr_dest, exito_dest = geocodificar_google(destino_tab2, config_actual['provincia'])
                         
                         origen_coord_str = f"{lat_or},{lng_or}" if exito_or else f"{config_actual['depot_coords'][0]},{config_actual['depot_coords'][1]}"
                         destino_coord_str = f"{lat_dest},{lng_dest}" if exito_dest else f"{config_actual['depot_coords'][0]},{config_actual['depot_coords'][1]}"
 
-                        for dia_idx in range(num_dias):
-                            dia_df = df_plan[df_plan['Dia_Cluster'] == dia_idx].copy()
-                            
-                            coords_grupo = [(lat_or if exito_or else config_actual["depot_coords"][0], lng_or if exito_or else config_actual["depot_coords"][1])] 
-                            coords_grupo += [(row['lat'], row['lng']) for _, row in dia_df.iterrows()]
-                            
-                            n_locs = len(coords_grupo)
-                            dist_matrix = []
-                            for i in range(n_locs):
-                                row_dist = []
-                                for j in range(n_locs):
-                                    if i == j: row_dist.append(0)
-                                    else:
-                                        lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
-                                        lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
-                                        a = np.sin((lat2-lat1)/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)**2
-                                        row_dist.append(int((2 * np.arcsin(np.sqrt(a))) * 6371000))
-                                dist_matrix.append(row_dist)
+                        # --- NUEVO: TSP GLOBAL PARA RESPETAR EL LÍMITE EXACTO DE CLIENTES ---
+                        coords_grupo = [(lat_or if exito_or else config_actual["depot_coords"][0], lng_or if exito_or else config_actual["depot_coords"][1])] 
+                        coords_grupo += [(row['lat'], row['lng']) for _, row in df_plan.iterrows()]
+                        
+                        n_locs = len(coords_grupo)
+                        dist_matrix = []
+                        for i in range(n_locs):
+                            row_dist = []
+                            for j in range(n_locs):
+                                if i == j: row_dist.append(0)
+                                else:
+                                    lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
+                                    lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
+                                    a = np.sin((lat2-lat1)/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)**2
+                                    row_dist.append(int((2 * np.arcsin(np.sqrt(a))) * 6371000))
+                            dist_matrix.append(row_dist)
 
-                            manager = pywrapcp.RoutingIndexManager(n_locs, 1, 0)
-                            routing = pywrapcp.RoutingModel(manager)
-                            routing.SetArcCostEvaluatorOfAllVehicles(routing.RegisterTransitCallback(lambda f, t: int(dist_matrix[manager.IndexToNode(f)][manager.IndexToNode(t)])))
-                            search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                        manager = pywrapcp.RoutingIndexManager(n_locs, 1, 0)
+                        routing = pywrapcp.RoutingModel(manager)
+                        routing.SetArcCostEvaluatorOfAllVehicles(routing.RegisterTransitCallback(lambda f, t: int(dist_matrix[manager.IndexToNode(f)][manager.IndexToNode(t)])))
+                        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
 
-                            solution = routing.SolveWithParameters(search_parameters)
-                            secuencia_indices = []
-                            if solution:
-                                index = routing.Start(0)
-                                while not routing.IsEnd(index):
-                                    node = manager.IndexToNode(index)
-                                    if node != 0: secuencia_indices.append(node - 1)
-                                    index = solution.Value(routing.NextVar(index))
-                            
-                            dia_df_ordenado = dia_df.iloc[secuencia_indices].copy()
-                            
-                            # --- NUEVA LÓGICA DE LINKS (Máximo 10 paradas, cadena continua) ---
-                            coords_ordenadas = dia_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
+                        solution = routing.SolveWithParameters(search_parameters)
+                        secuencia_indices = []
+                        if solution:
+                            index = routing.Start(0)
+                            while not routing.IsEnd(index):
+                                node = manager.IndexToNode(index)
+                                if node != 0: secuencia_indices.append(node - 1)
+                                index = solution.Value(routing.NextVar(index))
+                        
+                        df_plan_ordenado = df_plan.iloc[secuencia_indices].copy()
+                        
+                        # --- CORTE EXACTO POR DÍAS (Respeta límite) ---
+                        dias_list = [df_plan_ordenado.iloc[i:i + clientes_por_dia] for i in range(0, len(df_plan_ordenado), clientes_por_dia)]
+                        
+                        st.success(f"✅ Se planificaron **{len(df_plan_ordenado)} clientes** de forma continua, divididos exactamente en **{len(dias_list)} día(s)**. Copiá el texto de abajo o descargalo.")
+                        
+                        texto_global = ""
+                        
+                        for dia_idx, dia_df in enumerate(dias_list):
+                            coords_ordenadas = dia_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
                             todas_coords = [origen_coord_str] + coords_ordenadas + [destino_coord_str]
                             
                             rutas_links = []
-                            step = 10 # Hasta 9 paradas intermedias, 10 saltos
+                            step = 10 
                             
                             for i in range(0, len(todas_coords) - 1, step):
                                 chunk = todas_coords[i:i+step+1]
@@ -640,25 +626,33 @@ with tab2:
                                 rutas_links.append(url)
                             
                             # --- ARMADO DEL TEXTO (Formato Exacto Solicitado) ---
-                            st.markdown(f"### Día {dia_idx + 1}")
-                            texto_output = f"**Día {dia_idx + 1}:** "
-                            for idx_link, link_ruta in enumerate(rutas_links):
-                                texto_output += f"[Link Ruta {idx_link + 1}]({link_ruta}) | "
-                            texto_output += "  \n\n"
+                            texto_dia = f"Día {dia_idx + 1}: "
+                            links_str = [f"Link Ruta {idx_link + 1}: {link_ruta}" for idx_link, link_ruta in enumerate(rutas_links)]
+                            texto_dia += " | ".join(links_str) + "\n\n"
                             
-                            for paso, (_, row) in enumerate(dia_df_ordenado.iterrows(), 1):
+                            for paso, (_, row) in enumerate(dia_df.iterrows(), 1):
                                 rs = str(row.get('Razón Social', '')).replace('nan', '').strip()
                                 fantasia = str(row.get('Nombre Fantasía', '')).replace('nan', '').strip()
                                 direccion = str(row.get('Dirección', '')).replace('nan', '').strip()
                                 calles = str(row.get('Entre Calles', '')).replace('nan', '').strip()
                                 telefono = str(row.get('Teléfono 1', '')).replace('nan', '').strip()
                                 
-                                texto_output += f"**Cliente {paso}: {row['Cliente']}**  \n"
-                                texto_output += f"Razón Social: {rs if rs else '-'}  \n"
-                                texto_output += f"Nombre Fantasía: {fantasia if fantasia else '-'}  \n"
-                                texto_output += f"Dirección: {direccion if direccion else '-'}  \n"
-                                texto_output += f"Entre Calles: {calles if calles else '-'}  \n"
-                                texto_output += f"Teléfono 1: {telefono if telefono else '-'}  \n\n"
+                                texto_dia += f"Cliente {paso}: {row['Cliente']}\n"
+                                texto_dia += f"Razón Social: {rs if rs else '-'}\n"
+                                texto_dia += f"Nombre Fantasía: {fantasia if fantasia else '-'}\n"
+                                texto_dia += f"Dirección: {direccion if direccion else '-'}\n"
+                                texto_dia += f"Entre Calles: {calles if calles else '-'}\n"
+                                texto_dia += f"Teléfono 1: {telefono if telefono else '-'}\n\n"
                             
-                            st.markdown(texto_output)
-                            st.divider()
+                            texto_global += texto_dia + "--------------------------------------------------------\n\n"
+                        
+                        # --- MUESTRA EN PANTALLA CON BOTÓN DE COPIA Y DESCARGA ---
+                        st.code(texto_global, language="markdown")
+                        
+                        st.download_button(
+                            label="📥 Descargar Planificación en Archivo de Texto (.txt)",
+                            data=texto_global,
+                            file_name="planificacion_rutas.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
