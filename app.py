@@ -122,12 +122,6 @@ except Exception as e:
 opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
 config_actual = CENTROS_CONFIG[opcion_region]
 
-st.markdown("#### 📍 Origen y Destino de la Flota")
-origen_personalizado = st.text_input(
-    "Dirección de salida y regreso (Editable):", 
-    value=config_actual["depot_address"]
-)
-
 def geocodificar_google(dir_texto, ubicacion_geografica):
     query_principal = f"{dir_texto}, {ubicacion_geografica}, Argentina"
     try:
@@ -146,6 +140,13 @@ tab1, tab2 = st.tabs(["🚛 Ruteo Operativo Diario (Excel)", "📅 Planificador 
 # PESTAÑA 1: RUTEO ORIGINAL (EXCEL)
 # ==========================================
 with tab1:
+    st.markdown("#### 📍 Origen y Destino de la Flota (Día Actual)")
+    origen_personalizado = st.text_input(
+        "Dirección de salida y regreso (Editable):", 
+        value=config_actual["depot_address"],
+        key="origen_t1"
+    )
+
     uploaded_file = st.file_uploader("Cargar planilla de órdenes (.xlsx)", type=["xlsx"])
 
     if uploaded_file is not None:
@@ -431,20 +432,26 @@ with tab1:
                                         grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
                                         sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
                                         
+                                        # --- SOLUCIÓN DE LINKS (Cadena matemática de Waypoints) ---
                                         coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
-                                        rutas_links, tamano_bloque = [], 9
+                                        origen_str = f"{depot_lat},{depot_lng}"
+                                        todas_coords = [origen_str] + coords_ordenadas + [origen_str]
                                         
-                                        for i in range(0, len(coords_ordenadas), tamano_bloque):
-                                            bloque_coords = coords_ordenadas[i:i+tamano_bloque]
-                                            origen_ruta = direccion_origen_final if i == 0 else coords_ordenadas[i-1]
-                                            if i + tamano_bloque >= len(coords_ordenadas): destino_ruta = direccion_origen_final
-                                            else:
-                                                destino_ruta = bloque_coords[-1]
-                                                bloque_coords = bloque_coords[:-1]
+                                        rutas_links = []
+                                        step = 10 # Hasta 9 paradas intermedias
+                                        
+                                        for i in range(0, len(todas_coords) - 1, step):
+                                            chunk = todas_coords[i:i+step+1]
+                                            origen_ruta = chunk[0]
+                                            destino_ruta = chunk[-1]
+                                            waypoints = chunk[1:-1]
+                                            waypoints_str = "|".join([urllib.parse.quote(w) for w in waypoints])
                                             
-                                            waypoints_str = "|".join([urllib.parse.quote(c) for c in bloque_coords])
-                                            rutas_links.append(f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen_ruta)}&destination={urllib.parse.quote(destino_ruta)}&waypoints={waypoints_str}&travelmode=driving")
+                                            link = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen_ruta)}&destination={urllib.parse.quote(destino_ruta)}&waypoints={waypoints_str}&travelmode=driving"
+                                            rutas_links.append(link)
                                         
+                                        tiempo_est = (km_v / 25.0) + ((len(sub_df_ordenado) * MINUTOS_POR_PARADA) / 60.0)
+
                                         with cols[idx_col]:
                                             st.markdown(f"### 🚚 {v_nombre}")
                                             st.metric("Ubicaciones a Visitar", len(sub_df_ordenado))
@@ -496,6 +503,14 @@ with tab1:
 # ==========================================
 with tab2:
     st.markdown("### 📅 Planificador de Visitas Masivas")
+    
+    # NUEVAS CAJAS DE TEXTO PARA SALIDA Y LLEGADA
+    col_origen, col_destino = st.columns(2)
+    with col_origen:
+        origen_tab2 = st.text_input("📍 Dirección de Salida (Inicio):", value=config_actual["depot_address"], key="origen_t2")
+    with col_destino:
+        destino_tab2 = st.text_input("🏁 Dirección de Llegada (Fin):", value=config_actual["depot_address"], key="destino_t2")
+
     st.info("Pegá un listado de N° de Clientes y el sistema los agrupará geográficamente por día usando la información de la Base Maestra.")
     
     col_input1, col_input2 = st.columns([3, 1])
@@ -514,18 +529,17 @@ with tab2:
         if DF_MAESTRO.empty:
             st.error("🚨 No se encontró maestro_clientes.csv para extraer los datos.")
         else:
-            # 1. Limpieza de input
             raw_clients = re.split(r'[\s,]+', clientes_input.strip())
             clean_clients = [str(c).replace('.0', '').strip().zfill(9) for c in raw_clients if c]
             
-            # 2. Filtrar Maestro (Acá aseguramos traer Teléfono si existe en tu maestro, o dejarlo vacío)
+            # Traemos las columnas exactas solicitadas del Maestro
             columnas_maestro = DF_MAESTRO.columns.tolist()
-            col_tel = 'Teléfono' if 'Teléfono' in columnas_maestro else ('Telefono' if 'Telefono' in columnas_maestro else None)
             
-            cols_a_traer = ['Cliente', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Dirección', 'Entre Calles']
-            if col_tel: cols_a_traer.append(col_tel)
+            cols_a_traer = ['Cliente', 'Latitud', 'Longitud', 'Dirección', 'Entre Calles']
+            if 'Razón Social' in columnas_maestro: cols_a_traer.append('Razón Social')
+            if 'Nombre Fantasía' in columnas_maestro: cols_a_traer.append('Nombre Fantasía')
+            if 'Teléfono 1' in columnas_maestro: cols_a_traer.append('Teléfono 1')
             
-            # Filtramos solo los que coinciden con los que pegaste
             df_plan = DF_MAESTRO[DF_MAESTRO['Cliente'].isin(clean_clients)][cols_a_traer].copy()
             
             clientes_encontrados = df_plan['Cliente'].tolist()
@@ -536,7 +550,6 @@ with tab2:
             
             if not df_plan.empty:
                 with st.spinner("Agrupando geográficamente y trazando rutas..."):
-                    # 3. Limpiar coordenadas
                     def limpiar_coord_multi(val):
                         s = str(val).strip()
                         s = re.sub(r'[^\d-]', '', s)
@@ -545,14 +558,13 @@ with tab2:
                         if len(s) > 3: s = s[:3] + '.' + s[3:] 
                         return float(s)
                     
-                    df_plan['lat'] = df_plan['Longitud'].apply(limpiar_coord_multi) # Invertido intencionalmente según lógica original
+                    df_plan['lat'] = df_plan['Longitud'].apply(limpiar_coord_multi)
                     df_plan['lng'] = df_plan['Latitud'].apply(limpiar_coord_multi)
                     df_plan = df_plan.dropna(subset=['lat', 'lng']).copy()
                     
                     if df_plan.empty:
                         st.error("Ninguno de los clientes encontrados tiene coordenadas válidas.")
                     else:
-                        # 4. Agrupar por días usando KMeans (cercanía geográfica)
                         total_clientes = len(df_plan)
                         num_dias = math.ceil(total_clientes / clientes_por_dia)
                         
@@ -565,22 +577,21 @@ with tab2:
                         else:
                             df_plan['Dia_Cluster'] = 0
                             
-                        # 5. Generar output final por día
                         st.divider()
                         
-                        # Ubicación base (Origen/Destino)
-                        if origen_personalizado.strip() == config_actual["depot_address"].strip():
-                            depot_lat, depot_lng = config_actual["depot_coords"]
-                        else:
-                            lat_or, lng_or, f_addr_or, exito_or = geocodificar_google(origen_personalizado, config_actual['provincia'])
-                            if exito_or: depot_lat, depot_lng = lat_or, lng_or
-                            else: depot_lat, depot_lng = config_actual["depot_coords"]
+                        # Ubicaciones de Inicio y Fin Manuales
+                        lat_or, lng_or, f_addr_or, exito_or = geocodificar_google(origen_tab2, config_actual['provincia'])
+                        lat_dest, lng_dest, f_addr_dest, exito_dest = geocodificar_google(destino_tab2, config_actual['provincia'])
+                        
+                        origen_coord_str = f"{lat_or},{lng_or}" if exito_or else f"{config_actual['depot_coords'][0]},{config_actual['depot_coords'][1]}"
+                        destino_coord_str = f"{lat_dest},{lng_dest}" if exito_dest else f"{config_actual['depot_coords'][0]},{config_actual['depot_coords'][1]}"
 
                         for dia_idx in range(num_dias):
                             dia_df = df_plan[df_plan['Dia_Cluster'] == dia_idx].copy()
                             
-                            # --- Aplicar Ruteo Óptimo (TSP) para este día ---
-                            coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in dia_df.iterrows()]
+                            coords_grupo = [(lat_or if exito_or else config_actual["depot_coords"][0], lng_or if exito_or else config_actual["depot_coords"][1])] 
+                            coords_grupo += [(row['lat'], row['lng']) for _, row in dia_df.iterrows()]
+                            
                             n_locs = len(coords_grupo)
                             dist_matrix = []
                             for i in range(n_locs):
@@ -611,40 +622,43 @@ with tab2:
                             
                             dia_df_ordenado = dia_df.iloc[secuencia_indices].copy()
                             
-                            # --- Armado de Links de Google Maps ---
+                            # --- NUEVA LÓGICA DE LINKS (Máximo 10 paradas, cadena continua) ---
                             coords_ordenadas = dia_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
+                            todas_coords = [origen_coord_str] + coords_ordenadas + [destino_coord_str]
+                            
                             rutas_links = []
-                            tamano_bloque = 9
+                            step = 10 # Hasta 9 paradas intermedias, 10 saltos
                             
-                            for i in range(0, len(coords_ordenadas), tamano_bloque):
-                                bloque_coords = coords_ordenadas[i:i+tamano_bloque]
-                                origen_ruta = f"{depot_lat},{depot_lng}" if i == 0 else coords_ordenadas[i-1]
-                                destino_ruta = f"{depot_lat},{depot_lng}" if i + tamano_bloque >= len(coords_ordenadas) else bloque_coords.pop()
+                            for i in range(0, len(todas_coords) - 1, step):
+                                chunk = todas_coords[i:i+step+1]
+                                origen = chunk[0]
+                                destino = chunk[-1]
+                                waypoints = chunk[1:-1]
                                 
-                                waypoints_str = "|".join([urllib.parse.quote(c) for c in bloque_coords])
-                                rutas_links.append(f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen_ruta)}&destination={urllib.parse.quote(destino_ruta)}&waypoints={waypoints_str}&travelmode=driving")
+                                wp_str = "|".join([urllib.parse.quote(w) for w in waypoints])
+                                url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen)}&destination={urllib.parse.quote(destino)}&waypoints={wp_str}&travelmode=driving"
+                                rutas_links.append(url)
                             
-                            # --- Impresión en Pantalla ---
+                            # --- ARMADO DEL TEXTO (Formato Exacto Solicitado) ---
                             st.markdown(f"### Día {dia_idx + 1}")
-                            
-                            texto_output = f"**Día {dia_idx + 1}:**\n"
+                            texto_output = f"**Día {dia_idx + 1}:** "
                             for idx_link, link_ruta in enumerate(rutas_links):
                                 texto_output += f"[Link Ruta {idx_link + 1}]({link_ruta}) | "
-                            texto_output += "\n\n"
+                            texto_output += "  \n\n"
                             
                             for paso, (_, row) in enumerate(dia_df_ordenado.iterrows(), 1):
-                                fantasia = str(row.get('Nombre Fantasía', ''))
-                                direccion = str(row.get('Dirección', ''))
-                                calles = str(row.get('Entre Calles', ''))
-                                telefono = str(row.get(col_tel, '')) if col_tel else ''
+                                rs = str(row.get('Razón Social', '')).replace('nan', '').strip()
+                                fantasia = str(row.get('Nombre Fantasía', '')).replace('nan', '').strip()
+                                direccion = str(row.get('Dirección', '')).replace('nan', '').strip()
+                                calles = str(row.get('Entre Calles', '')).replace('nan', '').strip()
+                                telefono = str(row.get('Teléfono 1', '')).replace('nan', '').strip()
                                 
-                                fantasia_str = f" ({fantasia})" if fantasia and fantasia.lower() != 'nan' else ""
-                                
-                                texto_output += f"**Cliente {paso}: {row['Cliente']}{fantasia_str}**\n"
-                                texto_output += f"- Razón Social: {fantasia if fantasia and fantasia.lower() != 'nan' else '-'}\n"
-                                texto_output += f"- Dirección: {direccion if direccion and direccion.lower() != 'nan' else '-'}\n"
-                                texto_output += f"- Entre Calles: {calles if calles and calles.lower() != 'nan' else '-'}\n"
-                                texto_output += f"- Teléfono 1: {telefono if telefono and telefono.lower() != 'nan' else '-'}\n\n"
+                                texto_output += f"**Cliente {paso}: {row['Cliente']}**  \n"
+                                texto_output += f"Razón Social: {rs if rs else '-'}  \n"
+                                texto_output += f"Nombre Fantasía: {fantasia if fantasia else '-'}  \n"
+                                texto_output += f"Dirección: {direccion if direccion else '-'}  \n"
+                                texto_output += f"Entre Calles: {calles if calles else '-'}  \n"
+                                texto_output += f"Teléfono 1: {telefono if telefono else '-'}  \n\n"
                             
                             st.markdown(texto_output)
                             st.divider()
