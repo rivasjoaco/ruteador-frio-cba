@@ -626,9 +626,10 @@ with tab2:
                                 rutas_links.append(url)
                             
                             # --- ARMADO DEL TEXTO (Formato Exacto Solicitado) ---
-                            texto_dia = f"Día {dia_idx + 1}: "
-                            links_str = [f"Link Ruta {idx_link + 1}: {link_ruta}" for idx_link, link_ruta in enumerate(rutas_links)]
-                            texto_dia += " | ".join(links_str) + "\n\n"
+                            texto_dia = f"Día {dia_idx + 1}:\n"
+                            for idx_link, link_ruta in enumerate(rutas_links):
+                                texto_dia += f"Link Ruta {idx_link + 1}: {link_ruta}\n"
+                            texto_dia += "\n"
                             
                             for paso, (_, row) in enumerate(dia_df.iterrows(), 1):
                                 rs = str(row.get('Razón Social', '')).replace('nan', '').strip()
