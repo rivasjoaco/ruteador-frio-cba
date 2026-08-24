@@ -154,7 +154,7 @@ with tab1:
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip() for c in df.columns]
 
-col_orden = df.columns[0]      
+            col_orden = df.columns[0]      
             col_cliente = df.columns[1]    
             col_direccion = df.columns[3]  
             col_telefono = df.columns[5]   
@@ -169,8 +169,8 @@ col_orden = df.columns[0]
                 col_fecha = df.columns[11] # L (Fecha creación)
             else:
                 col_fecha = "Fecha_Creacion_Faltante"
-                df[col_fecha] = pd.Timestamp.today()  
-
+                df[col_fecha] = pd.Timestamp.today()
+            
             codigos_centro = [str(c) for c in config_actual["codigos"]]
             df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
 
@@ -501,7 +501,6 @@ col_orden = df.columns[0]
                                         st.download_button(label="📥 Descargar Excel Final", data=file, file_name="ordenes_despachadas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
-
 
 # ==========================================
 # PESTAÑA 2: PLANIFICADOR MULTI-DÍA (NUEVO)
