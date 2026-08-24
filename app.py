@@ -154,7 +154,7 @@ with tab1:
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip() for c in df.columns]
 
-            col_orden = df.columns[0]      
+col_orden = df.columns[0]      
             col_cliente = df.columns[1]    
             col_direccion = df.columns[3]  
             col_telefono = df.columns[5]   
@@ -163,7 +163,13 @@ with tab1:
             col_puesto = df.columns[8]     
             col_activo = df.columns[9]     
             col_centro = df.columns[10]    
-            col_fecha = df.columns[11]     
+            
+            # --- FIX: Prevención del "Index out of bounds" ---
+            if len(df.columns) > 11:
+                col_fecha = df.columns[11] # L (Fecha creación)
+            else:
+                col_fecha = "Fecha_Creacion_Faltante"
+                df[col_fecha] = pd.Timestamp.today()  
 
             codigos_centro = [str(c) for c in config_actual["codigos"]]
             df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
