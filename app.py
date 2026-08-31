@@ -21,7 +21,7 @@ CENTROS_CONFIG = {
     "Córdoba (Centro 0960)": {
         "codigos": ["0960", "960"],
         "depot_address": "Depósito San Isidro EDASA Coca Cola X5016 Córdoba, Argentina",
-        "depot_coords": (-31.442, -64.148),
+        "depot_coords": (-31.46682, -64.18968),
         "provincia": "Córdoba",
         "ciudad": "Córdoba Capital"
     },
