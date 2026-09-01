@@ -481,7 +481,7 @@ with tab1:
                                             ruta_coords.append((depot_lat, depot_lng))
                                             folium.PolyLine(ruta_coords, color="blue", weight=3, opacity=0.7).add_to(m)
                                             
-                                            st_folium(m, use_container_width=True, height=350, key=f"mapa_rutas_{v_nombre}")
+                                            st.components.v1.html(m._repr_html_(), height=350)
                                             # --------------------------------
 
                                             st.markdown("**Secuencia Óptima:**")
