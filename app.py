@@ -6,6 +6,8 @@ import re
 import unicodedata
 import math
 import googlemaps
+import folium
+from streamlit_folium import st_folium
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
@@ -21,7 +23,7 @@ CENTROS_CONFIG = {
     "Córdoba (Centro 0960)": {
         "codigos": ["0960", "960"],
         "depot_address": "Depósito San Isidro EDASA Coca Cola X5016 Córdoba, Argentina",
-        "depot_coords": (-31.46682, -64.18968),
+        "depot_coords": (-31.38495, -64.08843),
         "provincia": "Córdoba",
         "ciudad": "Córdoba Capital"
     },
@@ -118,7 +120,6 @@ except Exception as e:
     st.error(f"Error al conectar con la API de Google Maps: {e}")
     st.stop()
 
-# Selección de Base (Aplica a ambas pestañas)
 opcion_region = st.selectbox("Seleccione el Centro / Región a procesar:", list(CENTROS_CONFIG.keys()))
 config_actual = CENTROS_CONFIG[opcion_region]
 
@@ -164,9 +165,8 @@ with tab1:
             col_activo = df.columns[9]     
             col_centro = df.columns[10]    
             
-            # --- FIX: Prevención del "Index out of bounds" ---
             if len(df.columns) > 11:
-                col_fecha = df.columns[11] # L (Fecha creación)
+                col_fecha = df.columns[11] 
             else:
                 col_fecha = "Fecha_Creacion_Faltante"
                 df[col_fecha] = pd.Timestamp.today()
@@ -460,6 +460,30 @@ with tab1:
                                         with cols[idx_col]:
                                             st.markdown(f"### 🚚 {v_nombre}")
                                             st.metric("Ubicaciones a Visitar", len(sub_df_ordenado))
+                                            
+                                            # --- MAPA INTERACTIVO (NUEVO) ---
+                                            m = folium.Map(location=[depot_lat, depot_lng], zoom_start=12)
+                                            folium.Marker(
+                                                location=[depot_lat, depot_lng],
+                                                popup="🏠 BASE",
+                                                icon=folium.Icon(color="red", icon="home")
+                                            ).add_to(m)
+                                            
+                                            ruta_coords = [(depot_lat, depot_lng)]
+                                            for paso_mapa, (_, local_m) in enumerate(sub_df_ordenado.iterrows(), 1):
+                                                ruta_coords.append((local_m['lat'], local_m['lng']))
+                                                folium.Marker(
+                                                    location=[local_m['lat'], local_m['lng']],
+                                                    popup=f"Parada {paso_mapa}: {local_m['cliente_principal']}",
+                                                    icon=folium.Icon(color="blue", icon="info-sign")
+                                                ).add_to(m)
+                                                
+                                            ruta_coords.append((depot_lat, depot_lng))
+                                            folium.PolyLine(ruta_coords, color="blue", weight=3, opacity=0.7).add_to(m)
+                                            
+                                            st_folium(m, use_container_width=True, height=350, key=f"mapa_rutas_{v_nombre}")
+                                            # --------------------------------
+
                                             st.markdown("**Secuencia Óptima:**")
                                             paso, texto_paradas_wa = 1, ""
                                             
@@ -606,7 +630,6 @@ with tab2:
                         
                         df_plan_ordenado = df_plan.iloc[secuencia_indices].copy()
                         
-                        # --- CORTE EXACTO POR DÍAS (Respeta límite) ---
                         dias_list = [df_plan_ordenado.iloc[i:i + clientes_por_dia] for i in range(0, len(df_plan_ordenado), clientes_por_dia)]
                         
                         st.success(f"✅ Se planificaron **{len(df_plan_ordenado)} clientes** de forma continua, divididos exactamente en **{len(dias_list)} día(s)**. Copiá el texto de abajo o descargalo.")
@@ -630,7 +653,6 @@ with tab2:
                                 url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen)}&destination={urllib.parse.quote(destino)}&waypoints={wp_str}&travelmode=driving"
                                 rutas_links.append(url)
                             
-                            # --- ARMADO DEL TEXTO (Formato Exacto Solicitado) ---
                             texto_dia = f"Día {dia_idx + 1}:\n"
                             for idx_link, link_ruta in enumerate(rutas_links):
                                 texto_dia += f"Link Ruta {idx_link + 1}: {link_ruta}\n"
@@ -652,7 +674,6 @@ with tab2:
                             
                             texto_global += texto_dia + "--------------------------------------------------------\n\n"
                         
-                        # --- MUESTRA EN PANTALLA CON BOTÓN DE COPIA Y DESCARGA ---
                         st.code(texto_global, language="markdown")
                         
                         st.download_button(
