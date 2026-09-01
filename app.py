@@ -384,14 +384,21 @@ with tab1:
                             df_locales['Forzar_Primera'] = df_editado['Forzar_Primera']
 
                             st.divider()
-                            if st.button("⚡ Calcular Secuencias Óptimas y Despachar", type="primary"):
-                                with st.spinner("Trazando rutas..."):
+                            
+                            # --- INICIO DEL MOTOR HUMAN-IN-THE-LOOP ---
+                            if "borrador_rutas" not in st.session_state:
+                                st.session_state.borrador_rutas = None
+
+                            if st.button("⚡ 1. Generar Borrador de Rutas", type="primary"):
+                                with st.spinner("Calculando ruteo matemático inicial..."):
                                     if origen_personalizado.strip() == config_actual["depot_address"].strip():
                                         depot_lat, depot_lng, direccion_origen_final = config_actual["depot_coords"][0], config_actual["depot_coords"][1], config_actual["depot_address"]
                                     else:
                                         lat_or, lng_or, f_addr_or, exito_or = geocodificar_google(origen_personalizado, config_actual['provincia'])
                                         if exito_or: depot_lat, depot_lng, direccion_origen_final = lat_or, lng_or, f_addr_or
                                         else: depot_lat, depot_lng, direccion_origen_final = config_actual["depot_coords"][0], config_actual["depot_coords"][1], config_actual["depot_address"]
+                                    
+                                    st.session_state.depot_info = (depot_lat, depot_lng, direccion_origen_final)
                                     
                                     def optimizar_secuencia_grupo(df_grupo):
                                         coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_grupo.iterrows()]
@@ -431,12 +438,72 @@ with tab1:
                                                 distancia_total += routing.GetArcCostForVehicle(prev_index, index, 0)
                                         return df_grupo.iloc[secuencia_indices].copy(), distancia_total / 1000.0
 
+                                    resultados = {}
                                     vehiculos_unicos = df_locales['Vehículo Asignado'].unique()
-                                    cols = st.columns(len(vehiculos_unicos))
                                     
-                                    for idx_col, v_nombre in enumerate(sorted(vehiculos_unicos)):
+                                    for v_nombre in sorted(vehiculos_unicos):
                                         grupo_df = df_locales[df_locales['Vehículo Asignado'] == v_nombre]
                                         sub_df_ordenado, km_v = optimizar_secuencia_grupo(grupo_df)
+                                        sub_df_ordenado['Orden_Visita'] = range(1, len(sub_df_ordenado) + 1)
+                                        resultados[v_nombre] = {'df': sub_df_ordenado, 'km': km_v}
+                                        
+                                    st.session_state.borrador_rutas = resultados
+                                    st.rerun()
+
+                            if st.session_state.borrador_rutas is not None:
+                                st.markdown("### 📝 Ajuste Manual (Human-in-the-Loop)")
+                                st.info("👇 **Revisá el mapa.** Si querés cambiar el orden de una visita, modificá el número en la columna **'Orden_Visita'** de la tabla. Al terminar, dale a Confirmar abajo.")
+                                
+                                depot_lat, depot_lng, direccion_origen_final = st.session_state.depot_info
+                                rutas_editadas = {}
+                                
+                                vehiculos_unicos = list(st.session_state.borrador_rutas.keys())
+                                cols = st.columns(len(vehiculos_unicos))
+                                
+                                for idx_col, v_nombre in enumerate(vehiculos_unicos):
+                                    with cols[idx_col]:
+                                        st.markdown(f"#### 🚚 {v_nombre}")
+                                        
+                                        df_b = st.session_state.borrador_rutas[v_nombre]['df']
+                                        
+                                        df_ed = st.data_editor(
+                                            df_b[['Orden_Visita', 'cliente_principal', 'direccion']].copy(),
+                                            column_config={
+                                                "Orden_Visita": st.column_config.NumberColumn("Orden", min_value=1, max_value=50, step=1),
+                                                "cliente_principal": st.column_config.TextColumn("Cliente", disabled=True),
+                                                "direccion": st.column_config.TextColumn("Dirección", disabled=True)
+                                            },
+                                            hide_index=True, key=f"editor_{v_nombre}", use_container_width=True
+                                        )
+                                        
+                                        df_b_final = df_b.copy()
+                                        df_b_final['Orden_Visita'] = df_ed['Orden_Visita'].values
+                                        df_b_final = df_b_final.sort_values('Orden_Visita')
+                                        rutas_editadas[v_nombre] = df_b_final
+                                        
+                                        m = folium.Map(location=[depot_lat, depot_lng], zoom_start=12)
+                                        folium.Marker(location=[depot_lat, depot_lng], popup="🏠 BASE", icon=folium.Icon(color="red", icon="home")).add_to(m)
+                                        
+                                        ruta_coords = [(depot_lat, depot_lng)]
+                                        for paso_mapa, (_, local_m) in enumerate(df_b_final.iterrows(), 1):
+                                            ruta_coords.append((local_m['lat'], local_m['lng']))
+                                            folium.Marker(
+                                                location=[local_m['lat'], local_m['lng']],
+                                                popup=f"Parada {paso_mapa}: {local_m['cliente_principal']}",
+                                                icon=folium.Icon(color="blue", icon="info-sign")
+                                            ).add_to(m)
+                                            
+                                        ruta_coords.append((depot_lat, depot_lng))
+                                        folium.PolyLine(ruta_coords, color="blue", weight=3, opacity=0.7).add_to(m)
+                                        
+                                        st.components.v1.html(m._repr_html_(), height=350)
+                                
+                                st.divider()
+                                if st.button("✅ 2. Confirmar Ruta y Generar Despacho", type="primary"):
+                                    cols_final = st.columns(len(vehiculos_unicos))
+                                    for idx_col, v_nombre in enumerate(vehiculos_unicos):
+                                        sub_df_ordenado = rutas_editadas[v_nombre]
+                                        km_v = st.session_state.borrador_rutas[v_nombre]['km']
                                         
                                         coords_ordenadas = sub_df_ordenado.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
                                         origen_str = f"{depot_lat},{depot_lng}"
@@ -447,44 +514,12 @@ with tab1:
                                         
                                         for i in range(0, len(todas_coords) - 1, step):
                                             chunk = todas_coords[i:i+step+1]
-                                            origen_ruta = chunk[0]
-                                            destino_ruta = chunk[-1]
-                                            waypoints = chunk[1:-1]
-                                            waypoints_str = "|".join([urllib.parse.quote(w) for w in waypoints])
-                                            
-                                            link = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(origen_ruta)}&destination={urllib.parse.quote(destino_ruta)}&waypoints={waypoints_str}&travelmode=driving"
+                                            waypoints_str = "|".join([urllib.parse.quote(w) for w in chunk[1:-1]])
+                                            link = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(chunk[0])}&destination={urllib.parse.quote(chunk[-1])}&waypoints={waypoints_str}&travelmode=driving"
                                             rutas_links.append(link)
                                         
-                                        tiempo_est = (km_v / 25.0) + ((len(sub_df_ordenado) * MINUTOS_POR_PARADA) / 60.0)
-
-                                        with cols[idx_col]:
-                                            st.markdown(f"### 🚚 {v_nombre}")
-                                            st.metric("Ubicaciones a Visitar", len(sub_df_ordenado))
-                                            
-                                            # --- MAPA INTERACTIVO (NUEVO) ---
-                                            m = folium.Map(location=[depot_lat, depot_lng], zoom_start=12)
-                                            folium.Marker(
-                                                location=[depot_lat, depot_lng],
-                                                popup="🏠 BASE",
-                                                icon=folium.Icon(color="red", icon="home")
-                                            ).add_to(m)
-                                            
-                                            ruta_coords = [(depot_lat, depot_lng)]
-                                            for paso_mapa, (_, local_m) in enumerate(sub_df_ordenado.iterrows(), 1):
-                                                ruta_coords.append((local_m['lat'], local_m['lng']))
-                                                folium.Marker(
-                                                    location=[local_m['lat'], local_m['lng']],
-                                                    popup=f"Parada {paso_mapa}: {local_m['cliente_principal']}",
-                                                    icon=folium.Icon(color="blue", icon="info-sign")
-                                                ).add_to(m)
-                                                
-                                            ruta_coords.append((depot_lat, depot_lng))
-                                            folium.PolyLine(ruta_coords, color="blue", weight=3, opacity=0.7).add_to(m)
-                                            
-                                            st.components.v1.html(m._repr_html_(), height=350)
-                                            # --------------------------------
-
-                                            st.markdown("**Secuencia Óptima:**")
+                                        with cols_final[idx_col]:
+                                            st.markdown(f"### 🚚 {v_nombre} (Despachado)")
                                             paso, texto_paradas_wa = 1, ""
                                             
                                             for _, local in sub_df_ordenado.iterrows():
@@ -497,17 +532,17 @@ with tab1:
                                                 st.markdown(f"**{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}**")
                                                 st.caption(f"📍 {local['direccion']}")
                                                 if str(local['entre_calles']).strip(): st.caption(f"🛣️ Entre calles: {local['entre_calles']}")
-                                                if tel_crudo and tel_crudo.lower() != 'nan': st.caption(f"📞 Teléfono: {tel_crudo}")
                                                 
                                                 texto_paradas_wa += f"%0A*{paso}. {local['cliente_principal']}{texto_fantasia}{texto_vip}*%0A📍 {local['direccion']}%0A{texto_entre}{texto_tel_wa}"
                                                 
                                                 for det in local['detalles']:
-                                                    st.write(f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}` | Activo: `{det['activo']}` | Obs: `{det['obs']}`")
+                                                    st.write(f"↳ Puesto: `{det['puesto']}` | Orden: `{det['orden']}`")
                                                     texto_paradas_wa += f"   🔸 *Puesto:* {det['puesto']} | *Orden:* {det['orden']}%0A   🔸 *Activo:* {det['activo']} | *Obs:* {det['obs']}%0A%0A"
 
                                                 for orig_idx in local['indices_originales']:
                                                     df.loc[orig_idx, 'Vehículo Asignado'] = v_nombre
                                                     df.loc[orig_idx, 'Link de Ruta'] = str(rutas_links[0])
+                                                    df.loc[orig_idx, 'Orden Manual'] = paso
                                                 st.write("---")
                                                 paso += 1
 
@@ -519,10 +554,9 @@ with tab1:
                                             st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
 
                                     st.divider()
-                                    output_name = "ordenes_despachadas.xlsx"
-                                    df.to_excel(output_name, index=False)
-                                    with open(output_name, "rb") as file:
-                                        st.download_button(label="📥 Descargar Excel Final", data=file, file_name="ordenes_despachadas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                    df.to_excel("ordenes_despachadas.xlsx", index=False)
+                                    with open("ordenes_despachadas.xlsx", "rb") as file:
+                                        st.download_button("📥 Descargar Excel Final", data=file, file_name="ordenes_despachadas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
 
