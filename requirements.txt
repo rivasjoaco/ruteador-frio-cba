@@ -5,3 +5,5 @@ requests
 scikit-learn
 ortools
 googlemaps
+folium
+streamlit-folium
