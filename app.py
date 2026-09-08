@@ -469,7 +469,7 @@ with tab1:
                                         df_ed = st.data_editor(
                                             df_b[['Orden_Visita', 'cliente_principal', 'direccion']].copy(),
                                             column_config={
-                                                "Orden_Visita": st.column_config.NumberColumn("Orden", min_value=1, max_value=50, step=1),
+                                                "Orden_Visita": st.column_config.NumberColumn("Orden", min_value=1, max_value=50, step=0.1),
                                                 "cliente_principal": st.column_config.TextColumn("Cliente", disabled=True),
                                                 "direccion": st.column_config.TextColumn("Dirección", disabled=True)
                                             },
