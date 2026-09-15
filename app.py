@@ -278,11 +278,23 @@ with tab1:
                                     motivo_error = "Faltan coordenadas en el Maestro"
 
                                     es_casa_central = False
-                                    if d_orig == d_maestro: es_casa_central = True
+                                    if d_orig == d_maestro: 
+                                        es_casa_central = True
                                     else:
+                                        # Filtramos palabras y números
                                         pal_orig = [p for p in d_orig.split() if len(p) > 2 and not p.isdigit()]
                                         pal_mae = [p for p in d_maestro.split() if len(p) > 2 and not p.isdigit()]
-                                        if pal_orig and pal_mae and pal_orig[0] == pal_mae[0]: es_casa_central = True
+                                        num_orig = [p for p in d_orig.split() if p.isdigit()]
+                                        num_mae = [p for p in d_maestro.split() if p.isdigit()]
+                                        
+                                        # Si coincide la primera palabra (ej. "SAN")
+                                        if pal_orig and pal_mae and pal_orig[0] == pal_mae[0]:
+                                            # Chequeamos que también coincida el número de la calle
+                                            if num_orig and num_mae:
+                                                if num_orig[0] == num_mae[0]:
+                                                    es_casa_central = True
+                                            else:
+                                                es_casa_central = True
                                     
                                     if not d_maestro: es_casa_central = True
 
