@@ -348,8 +348,8 @@ with tab1:
                             
                             total_direcciones_unicas = len(df_filtrado_activo[['direccion_limpia', col_cliente]].drop_duplicates())
                             sug_vehiculos = 1
-                            if total_direcciones_unicas > 8: sug_vehiculos = 2
-                            if total_direcciones_unicas > 16: sug_vehiculos = 3
+                            if total_direcciones_unicas > 13: sug_vehiculos = 2
+                            if total_direcciones_unicas > 25: sug_vehiculos = 3
                             
                             col_v1, col_v2 = st.columns([2, 2])
                             with col_v1: cant_vehiculos = st.number_input("Cantidad de vehículos:", min_value=1, max_value=10, value=sug_vehiculos)
