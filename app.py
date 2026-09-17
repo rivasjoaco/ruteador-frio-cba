@@ -762,6 +762,14 @@ with tab3:
     
     if uploaded_fletes is not None:
         try:
+            # --- NUEVO: Pregunta interactiva de qué rutear ---
+            st.markdown("#### 3. ¿Qué querés rutear hoy?")
+            tipo_op = st.radio("Seleccioná la clase de orden:", ["Solo Instalaciones (ZC04)", "Solo Retiros (ZC09)", "Ambos (ZC04 y ZC09)"], horizontal=True)
+            
+            clases_permitidas = []
+            if "ZC04" in tipo_op: clases_permitidas.append("ZC04")
+            if "ZC09" in tipo_op: clases_permitidas.append("ZC09")
+            
             dff = pd.read_excel(uploaded_fletes)
             dff.columns = [str(c).strip() for c in dff.columns]
             
@@ -780,11 +788,11 @@ with tab3:
             cods_centro = [str(c) for c in config_actual["codigos"]]
             df_f_filt = dff[dff[col_f_centro].astype(str).str.strip().isin(cods_centro)].copy()
             
-            # --- FILTRO INVERSO: Solo ZC04 y ZC09 ---
-            df_f_filt = df_f_filt[df_f_filt[col_f_clase].astype(str).str.strip().str.upper().isin(['ZC04', 'ZC09'])].copy()
+            # --- FILTRO DINÁMICO (Aplica lo que elegiste arriba) ---
+            df_f_filt = df_f_filt[df_f_filt[col_f_clase].astype(str).str.strip().str.upper().isin(clases_permitidas)].copy()
             
             if df_f_filt.empty:
-                st.warning("⚠️ No hay equipos para mover (Instalaciones o Retiros) en este archivo.")
+                st.warning("⚠️ No hay equipos que coincidan con tu selección en este archivo.")
             else:
                 df_f_filt[col_f_cliente] = df_f_filt[col_f_cliente].astype(str).str.replace('.0', '', regex=False).str.strip().str.zfill(9) 
                 
@@ -813,8 +821,15 @@ with tab3:
                 st.success(f"✅ Se identificaron *{len(df_f_filt)}* movimientos logísticos pendientes.")
                 
                 if st.button("🚀 Calcular Ruteo Logístico por Capacidad", type="primary"):
-                    capacidades = df_flota_ed['Capacidad_Equipos'].astype(int).tolist()
+                    
+                    # --- FIX: Limpieza de la tabla editable para evitar el error "NaN to integer" ---
+                    df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1)
+                    capacidades = [int(c) for c in df_flota_ed['Capacidad_Equipos'].tolist()]
+                    
+                    df_flota_ed['Proveedor'] = df_flota_ed['Proveedor'].fillna('Transporte Indefinido')
+                    df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                     nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
+                    # ----------------------------------------------------------------------------------
                     
                     if sum(capacidades) < len(df_f_filt):
                         st.error(f"🚨 La capacidad total (suman {sum(capacidades)} lugares) no alcanza para los {len(df_f_filt)} equipos. Agregá camiones a la tabla arriba.")
@@ -848,7 +863,6 @@ with tab3:
                             transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                             routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-                            # Agregamos la restricción física de volumen a la IA
                             def demand_callback(from_index):
                                 return demandas[manager.IndexToNode(from_index)]
                             demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
