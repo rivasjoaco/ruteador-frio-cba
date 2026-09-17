@@ -816,20 +816,24 @@ with tab3:
 
                 df_f_filt['lat'] = df_f_filt['Longitud'].apply(limpiar_coord_f)
                 df_f_filt['lng'] = df_f_filt['Latitud'].apply(limpiar_coord_f)
+                
+                # Escudo 2: Obligar a que sean números para evitar NaN ocultos
+                df_f_filt['lat'] = pd.to_numeric(df_f_filt['lat'], errors='coerce')
+                df_f_filt['lng'] = pd.to_numeric(df_f_filt['lng'], errors='coerce')
                 df_f_filt = df_f_filt.dropna(subset=['lat', 'lng']).copy()
                 
                 st.success(f"✅ Se identificaron *{len(df_f_filt)}* movimientos logísticos pendientes.")
                 
                 if st.button("🚀 Calcular Ruteo Logístico por Capacidad", type="primary"):
                     
-                    # --- FIX: Limpieza de la tabla editable para evitar el error "NaN to integer" ---
-                    df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1)
-                    capacidades = [int(c) for c in df_flota_ed['Capacidad_Equipos'].tolist()]
+                    # --- Escudo 1: Conversión blindada de capacidades a enteros ---
+                    df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1).astype(int)
+                    capacidades = df_flota_ed['Capacidad_Equipos'].tolist()
                     
                     df_flota_ed['Proveedor'] = df_flota_ed['Proveedor'].fillna('Transporte Indefinido')
                     df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                     nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
-                    # ----------------------------------------------------------------------------------
+                    # --------------------------------------------------------------
                     
                     if sum(capacidades) < len(df_f_filt):
                         st.error(f"🚨 La capacidad total (suman {sum(capacidades)} lugares) no alcanza para los {len(df_f_filt)} equipos. Agregá camiones a la tabla arriba.")
@@ -838,22 +842,33 @@ with tab3:
                             depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
                             coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_filt.iterrows()]
                             
-                            # Dimensión CVRP (El camión consume 1 espacio por cada orden)
                             demandas = [0] + [1] * len(df_f_filt)
                             n_locs = len(coords_grupo)
                             num_vehicles = len(capacidades)
                             
+                            # --- Escudo 3: Protección matemática de la Matriz de Distancias ---
                             dist_matrix = []
                             for i in range(n_locs):
                                 row_dist = []
                                 for j in range(n_locs):
-                                    if i == j: row_dist.append(0)
+                                    if i == j: 
+                                        row_dist.append(0)
                                     else:
                                         lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
                                         lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
+                                        
                                         a = np.sin((lat2-lat1)/2)*2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)*2
-                                        row_dist.append(int((2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35))
+                                        # Limitamos 'a' entre 0 y 1 para que el sqrt y arcsin no tiren NaN nunca
+                                        a = max(0.0, min(1.0, float(a)))
+                                        
+                                        distancia_metros = (2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35
+                                        
+                                        if math.isnan(distancia_metros):
+                                            distancia_metros = 0
+                                            
+                                        row_dist.append(int(distancia_metros))
                                 dist_matrix.append(row_dist)
+                            # ------------------------------------------------------------------
 
                             manager = pywrapcp.RoutingIndexManager(n_locs, num_vehicles, 0)
                             routing = pywrapcp.RoutingModel(manager)
