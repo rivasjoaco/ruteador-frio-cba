@@ -740,3 +740,179 @@ with tab2:
                             mime="text/plain",
                             use_container_width=True
                         )
+
+# ==========================================
+# PESTAÑA 3: FLETES (ZC04 / ZC09) - CAPACIDAD
+# ==========================================
+with tab3:
+    st.markdown("### 📦 Planificador de Fletes (Instalaciones y Retiros)")
+    st.info("Agregá o quitá camiones en la tabla inferior indicando cuántos equipos pueden cargar. El sistema repartirá las instalaciones y retiros sin superar el límite físico de cada fletero.")
+    
+    st.markdown("#### 1. Configurar Proveedores y Capacidad")
+    if "flota_fletes" not in st.session_state:
+        st.session_state.flota_fletes = pd.DataFrame([
+            {"Proveedor": "Transporte A", "Móvil": "Camión 1", "Capacidad_Equipos": 8},
+            {"Proveedor": "Transporte B", "Móvil": "Camión 2", "Capacidad_Equipos": 12}
+        ])
+        
+    df_flota_ed = st.data_editor(st.session_state.flota_fletes, num_rows="dynamic", use_container_width=True)
+    
+    st.markdown("#### 2. Cargar Planilla de SAP")
+    uploaded_fletes = st.file_uploader("Subí el mismo Excel de hoy (.xlsx) - Solo procesará ZC04 y ZC09", type=["xlsx"], key="up_fletes")
+    
+    if uploaded_fletes is not None:
+        try:
+            dff = pd.read_excel(uploaded_fletes)
+            dff.columns = [str(c).strip() for c in dff.columns]
+            
+            col_f_orden = dff.columns[0]
+            col_f_cliente = dff.columns[1]
+            col_f_dir = dff.columns[3]
+            col_f_activo = dff.columns[9]
+            col_f_centro = dff.columns[10]
+            
+            if len(dff.columns) > 12:
+                col_f_clase = dff.columns[12]
+            else:
+                st.error("🚨 El archivo subido no tiene la Columna M (Clase de orden).")
+                st.stop()
+                
+            cods_centro = [str(c) for c in config_actual["codigos"]]
+            df_f_filt = dff[dff[col_f_centro].astype(str).str.strip().isin(cods_centro)].copy()
+            
+            # --- FILTRO INVERSO: Solo ZC04 y ZC09 ---
+            df_f_filt = df_f_filt[df_f_filt[col_f_clase].astype(str).str.strip().str.upper().isin(['ZC04', 'ZC09'])].copy()
+            
+            if df_f_filt.empty:
+                st.warning("⚠️ No hay equipos para mover (Instalaciones o Retiros) en este archivo.")
+            else:
+                df_f_filt[col_f_cliente] = df_f_filt[col_f_cliente].astype(str).str.replace('.0', '', regex=False).str.strip().str.zfill(9) 
+                
+                if not DF_MAESTRO.empty and 'Cliente' in DF_MAESTRO.columns:
+                    df_f_filt = df_f_filt.merge(
+                        DF_MAESTRO[['Cliente', 'Latitud', 'Longitud', 'Nombre Fantasía', 'Entre Calles']],
+                        left_on=col_f_cliente, right_on='Cliente', how='left'
+                    )
+                    df_f_filt['Nombre Fantasía'] = df_f_filt['Nombre Fantasía'].fillna('')
+                else:
+                    st.error("🚨 Maestro de clientes no cargado.")
+                    st.stop()
+
+                def limpiar_coord_f(val):
+                    s = str(val).strip()
+                    s = re.sub(r'[^\d-]', '', s)
+                    if not s or s == '-': return None
+                    if not s.startswith('-'): s = '-' + s
+                    if len(s) > 3: s = s[:3] + '.' + s[3:] 
+                    return float(s)
+
+                df_f_filt['lat'] = df_f_filt['Longitud'].apply(limpiar_coord_f)
+                df_f_filt['lng'] = df_f_filt['Latitud'].apply(limpiar_coord_f)
+                df_f_filt = df_f_filt.dropna(subset=['lat', 'lng']).copy()
+                
+                st.success(f"✅ Se identificaron *{len(df_f_filt)}* movimientos logísticos pendientes.")
+                
+                if st.button("🚀 Calcular Ruteo Logístico por Capacidad", type="primary"):
+                    capacidades = df_flota_ed['Capacidad_Equipos'].astype(int).tolist()
+                    nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
+                    
+                    if sum(capacidades) < len(df_f_filt):
+                        st.error(f"🚨 La capacidad total (suman {sum(capacidades)} lugares) no alcanza para los {len(df_f_filt)} equipos. Agregá camiones a la tabla arriba.")
+                    else:
+                        with st.spinner("Llenando camiones y trazando rutas..."):
+                            depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
+                            coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_filt.iterrows()]
+                            
+                            # Dimensión CVRP (El camión consume 1 espacio por cada orden)
+                            demandas = [0] + [1] * len(df_f_filt)
+                            n_locs = len(coords_grupo)
+                            num_vehicles = len(capacidades)
+                            
+                            dist_matrix = []
+                            for i in range(n_locs):
+                                row_dist = []
+                                for j in range(n_locs):
+                                    if i == j: row_dist.append(0)
+                                    else:
+                                        lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
+                                        lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
+                                        a = np.sin((lat2-lat1)/2)*2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)*2
+                                        row_dist.append(int((2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35))
+                                dist_matrix.append(row_dist)
+
+                            manager = pywrapcp.RoutingIndexManager(n_locs, num_vehicles, 0)
+                            routing = pywrapcp.RoutingModel(manager)
+
+                            def distance_callback(from_index, to_index):
+                                return dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+                            transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                            routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+                            # Agregamos la restricción física de volumen a la IA
+                            def demand_callback(from_index):
+                                return demandas[manager.IndexToNode(from_index)]
+                            demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+                            
+                            routing.AddDimensionWithVehicleCapacity(
+                                demand_callback_index,
+                                0,  
+                                capacidades,
+                                True,  
+                                'Capacity'
+                            )
+
+                            search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                            search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                            
+                            solution = routing.SolveWithParameters(search_parameters)
+                            
+                            if solution:
+                                cols_f = st.columns(num_vehicles)
+                                for vehicle_id in range(num_vehicles):
+                                    index = routing.Start(vehicle_id)
+                                    secuencia = []
+                                    while not routing.IsEnd(index):
+                                        node = manager.IndexToNode(index)
+                                        if node != 0: secuencia.append(node - 1)
+                                        index = solution.Value(routing.NextVar(index))
+                                        
+                                    if len(secuencia) > 0:
+                                        sub_df = df_f_filt.iloc[secuencia].copy()
+                                        movil_nom = nombres_moviles[vehicle_id]
+                                        
+                                        with cols_f[vehicle_id]:
+                                            st.markdown(f"### 🚚 {movil_nom}")
+                                            st.metric("Lugares Ocupados", f"{len(sub_df)} / {capacidades[vehicle_id]}")
+                                            
+                                            rutas_links = []
+                                            coords_ord = sub_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
+                                            todas_c = [f"{depot_lat},{depot_lng}"] + coords_ord + [f"{depot_lat},{depot_lng}"]
+                                            
+                                            for i in range(0, len(todas_c) - 1, 10):
+                                                chunk = todas_c[i:i+11]
+                                                wp_str = "|".join([urllib.parse.quote(w) for w in chunk[1:-1]])
+                                                rutas_links.append(f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(chunk[0])}&destination={urllib.parse.quote(chunk[-1])}&waypoints={wp_str}&travelmode=driving")
+                                            
+                                            paso, txt_wa = 1, ""
+                                            for _, row in sub_df.iterrows():
+                                                es_inst = str(row[col_f_clase]).strip().upper() == 'ZC04'
+                                                icono = "🟢 INSTALACIÓN (Bajar Equipo)" if es_inst else "🔴 RETIRO (Subir Equipo)"
+                                                fantasia = f" ({row.get('Nombre Fantasía','')})" if str(row.get('Nombre Fantasía','')).strip() else ""
+                                                
+                                                st.markdown(f"*{paso}. {row[col_f_cliente]}{fantasia}*")
+                                                st.caption(f"📍 {row[col_f_dir]}")
+                                                st.info(f"{icono} - Activo: {row[col_f_activo]}")
+                                                
+                                                txt_wa += f"%0A*{paso}. {row[col_f_cliente]}{fantasia}%0A📍 {row[col_f_dir]}%0A🛠️ *{icono} - Activo: {row[col_f_activo]}%0A"
+                                                paso += 1
+                                                
+                                            for idx_l, link_r in enumerate(rutas_links):
+                                                st.link_button(f"🗺️ Abrir Ruta (Parte {idx_l + 1})", link_r)
+                                                
+                                            txt_links_wa = "🔗 Link(s):%0A" + "".join([f"{urllib.parse.quote(lr)}%0A%0A" for lr in rutas_links])
+                                            msg_wa = f"🚚 FLETES - {movil_nom.upper()}%0A📊 Equipos a mover: {len(sub_df)}%0A----------------------------------------%0A📋 DETALLE:%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
+                                            st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
+                            else:
+                                st.error("No se pudo encontrar una ruta viable con esas capacidades.")
+        except Exception as e:
+            st.error(f"Error procesando archivo: {e}")
