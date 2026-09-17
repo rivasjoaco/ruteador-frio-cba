@@ -170,9 +170,20 @@ with tab1:
             else:
                 col_fecha = "Fecha_Creacion_Faltante"
                 df[col_fecha] = pd.Timestamp.today()
+                
+            # Mapeo Columna M (Clase de orden)
+            if len(df.columns) > 12:
+                col_clase = df.columns[12] 
+            else:
+                col_clase = "Clase_Orden_Faltante"
+                df[col_clase] = "ZC02"
             
             codigos_centro = [str(c) for c in config_actual["codigos"]]
             df_filtrado = df[df[col_centro].astype(str).str.strip().isin(codigos_centro)].copy()
+            
+            # --- NUEVO: Filtro automático para dejar SOLO Reparaciones ---
+            if col_clase in df_filtrado.columns:
+                df_filtrado = df_filtrado[df_filtrado[col_clase].astype(str).str.strip().str.upper() == "ZC02"].copy()
 
             if df_filtrado.empty:
                 st.warning(f"⚠️ No se encontraron órdenes correspondientes a {opcion_region}.")
