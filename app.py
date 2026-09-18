@@ -864,7 +864,7 @@ with tab3:
                     else:
                         st.success(f"✅ Se seleccionaron **{len(df_f_final)}** movimientos logísticos.")
                         
-                        if st.button("🚀 Calcular Ruteo Logístico Inteligente", type="primary"):
+                        if st.button("🚀 Calcular Ruteo Logístico Dinámico", type="primary"):
                             
                             df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1).astype(int)
                             capacidades = df_flota_ed['Capacidad_Equipos'].tolist()
@@ -873,7 +873,9 @@ with tab3:
                             df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                             nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
                             
-                            with st.spinner("Geocodificando y ruteando (Analizando viajes estratégicos)..."):
+                            # Eliminamos la validación de sum(capacidades) porque un camión puede hacer múltiples viajes (instala 1, retira 1)
+                            
+                            with st.spinner("Optimizando rutas y cuidando la capacidad de las cajas..."):
                                 
                                 if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
                                     depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
@@ -887,7 +889,15 @@ with tab3:
                                 
                                 coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_final.iterrows()]
                                 
-                                demandas = [0] + [1] * len(df_f_final)
+                                # --- NUEVO: Demandas dinámicas (+1 ocupa, -1 libera) ---
+                                demandas = [0]
+                                for _, row in df_f_final.iterrows():
+                                    if str(row[col_f_clase]).strip().upper() == 'ZC04':
+                                        demandas.append(-1)
+                                    else:
+                                        demandas.append(1)
+                                # ---------------------------------------------------------
+                                
                                 n_locs = len(coords_grupo)
                                 num_vehicles = len(capacidades)
                                 
@@ -924,19 +934,19 @@ with tab3:
                                     return demandas[manager.IndexToNode(from_index)]
                                 demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
                                 
+                                # --- NUEVO: Permitir salir cargado del depósito ---
                                 routing.AddDimensionWithVehicleCapacity(
                                     demand_callback_index,
                                     0,  
                                     capacidades,
-                                    True,  
+                                    False,  # <-- El parámetro False permite que el camión salga con instalaciones cargadas
                                     'Capacity'
                                 )
+                                # --------------------------------------------------
                                 
-                                # --- NUEVO: Disjunctions (Permitir viajes sin asignar por capacidad) ---
-                                penalty = 10000000  # Penalidad alta para asegurar que rutee lo más que pueda
+                                penalty = 10000000 
                                 for node in range(1, n_locs):
                                     routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
-                                # -----------------------------------------------------------------------
 
                                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                                 search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -945,7 +955,6 @@ with tab3:
                                 
                                 if solution:
                                     
-                                    # --- NUEVO: Detección de viajes que quedaron afuera ---
                                     nodos_descartados = []
                                     for node in range(1, n_locs):
                                         if solution.Value(routing.NextVar(manager.NodeToIndex(node))) == manager.NodeToIndex(node):
@@ -953,9 +962,8 @@ with tab3:
                                             
                                     if len(nodos_descartados) > 0:
                                         df_descartados = df_f_final.iloc[nodos_descartados].copy()
-                                        st.warning(f"⚠️ **Falta de Capacidad:** {len(nodos_descartados)} viaje(s) quedaron sin asignar porque los camiones están llenos. Se dejaron afuera los menos estratégicos.")
+                                        st.warning(f"⚠️ **Falta de Capacidad / Eficiencia:** {len(nodos_descartados)} viaje(s) quedaron sin asignar.")
                                         st.dataframe(df_descartados[[col_f_orden, col_f_cliente, col_f_dir, 'Zona de Venta']], hide_index=True)
-                                    # --------------------------------------------------------
 
                                     cols_f = st.columns(num_vehicles)
                                     for vehicle_id in range(num_vehicles):
@@ -970,9 +978,15 @@ with tab3:
                                             sub_df = df_f_final.iloc[secuencia].copy()
                                             movil_nom = nombres_moviles[vehicle_id]
                                             
+                                            # --- NUEVO: Métricas dinámicas para ver qué lleva el camión ---
+                                            cant_inst = sum(sub_df[col_f_clase].astype(str).str.strip().str.upper() == 'ZC04')
+                                            cant_ret = sum(sub_df[col_f_clase].astype(str).str.strip().str.upper() == 'ZC09')
+                                            
                                             with cols_f[vehicle_id]:
                                                 st.markdown(f"### 🚚 {movil_nom}")
-                                                st.metric("Lugares Ocupados", f"{len(sub_df)} / {capacidades[vehicle_id]}")
+                                                st.metric("Paradas Totales", f"{len(sub_df)}")
+                                                st.caption(f"🟩 {cant_inst} Instalaciones | 🟥 {cant_ret} Retiros (Caja Máx: {capacidades[vehicle_id]})")
+                                            # ----------------------------------------------------------------
                                                 
                                                 rutas_links = []
                                                 coords_ord = sub_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
@@ -1000,7 +1014,7 @@ with tab3:
                                                     st.link_button(f"🗺️ Abrir Ruta (Parte {idx_l + 1})", link_r)
                                                     
                                                 txt_links_wa = "🔗 *Link(s):*%0A" + "".join([f"{urllib.parse.quote(lr)}%0A%0A" for lr in rutas_links])
-                                                msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Equipos a mover:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
+                                                msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Paradas:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
                                                 st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
                                 else:
                                     st.error("No se pudo encontrar ninguna ruta viable.")
