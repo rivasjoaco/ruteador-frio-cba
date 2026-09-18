@@ -757,7 +757,6 @@ with tab3:
         
     df_flota_ed = st.data_editor(st.session_state.flota_fletes, num_rows="dynamic", use_container_width=True)
     
-    # --- NUEVO: Origen y Destino Editable ---
     st.markdown("#### 📍 Origen y Destino de la Flota (Día Actual)")
     origen_fletes = st.text_input(
         "Dirección de salida y regreso (Editable):", 
@@ -844,7 +843,6 @@ with tab3:
                 else:
                     df_f_filt = df_f_filt[df_f_filt['Zona de Venta'].isin(zonas_seleccionadas_f)].copy()
                     
-                    # --- NUEVO: Tabla de Selección de Viajes Específicos ---
                     st.markdown("### 🚫 Selección de Viajes Específicos")
                     
                     df_f_filt.insert(0, 'Rutear', True)
@@ -860,14 +858,13 @@ with tab3:
                     
                     ordenes_seleccionadas = df_editado_f[df_editado_f['Rutear'] == True][col_f_orden].tolist()
                     df_f_final = df_f_filt[df_f_filt[col_f_orden].isin(ordenes_seleccionadas)].copy()
-                    # ---------------------------------------------------------
                     
                     if df_f_final.empty:
                         st.warning("⚠️ No hay órdenes seleccionadas para rutear.")
                     else:
-                        st.success(f"✅ Se rutearán **{len(df_f_final)}** movimientos logísticos.")
+                        st.success(f"✅ Se seleccionaron **{len(df_f_final)}** movimientos logísticos.")
                         
-                        if st.button("🚀 Calcular Ruteo Logístico por Capacidad", type="primary"):
+                        if st.button("🚀 Calcular Ruteo Logístico Inteligente", type="primary"):
                             
                             df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1).astype(int)
                             capacidades = df_flota_ed['Capacidad_Equipos'].tolist()
@@ -876,121 +873,136 @@ with tab3:
                             df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                             nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
                             
-                            if sum(capacidades) < len(df_f_final):
-                                st.error(f"🚨 La capacidad total (suman {sum(capacidades)} lugares) no alcanza para los {len(df_f_final)} equipos. Agregá camiones a la tabla arriba o destildá viajes.")
-                            else:
-                                with st.spinner("Geocodificando origen y llenando camiones..."):
-                                    
-                                    # Lógica de geocodificación del origen si fue modificado
-                                    if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
+                            with st.spinner("Geocodificando y ruteando (Analizando viajes estratégicos)..."):
+                                
+                                if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
+                                    depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
+                                else:
+                                    lat_or, lng_or, _, exito_or = geocodificar_google(origen_fletes, config_actual.get('provincia', 'Córdoba'))
+                                    if exito_or:
+                                        depot_lat, depot_lng = lat_or, lng_or
+                                    else:
+                                        st.warning("⚠️ No se pudo geocodificar la dirección de origen. Usando base por defecto.")
                                         depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
-                                    else:
-                                        lat_or, lng_or, _, exito_or = geocodificar_google(origen_fletes, config_actual.get('provincia', 'Córdoba'))
-                                        if exito_or:
-                                            depot_lat, depot_lng = lat_or, lng_or
+                                
+                                coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_final.iterrows()]
+                                
+                                demandas = [0] + [1] * len(df_f_final)
+                                n_locs = len(coords_grupo)
+                                num_vehicles = len(capacidades)
+                                
+                                dist_matrix = []
+                                for i in range(n_locs):
+                                    row_dist = []
+                                    for j in range(n_locs):
+                                        if i == j: 
+                                            row_dist.append(0)
                                         else:
-                                            st.warning("⚠️ No se pudo geocodificar la dirección de origen. Usando base por defecto.")
-                                            depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
-                                    
-                                    coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_final.iterrows()]
-                                    
-                                    demandas = [0] + [1] * len(df_f_final)
-                                    n_locs = len(coords_grupo)
-                                    num_vehicles = len(capacidades)
-                                    
-                                    dist_matrix = []
-                                    for i in range(n_locs):
-                                        row_dist = []
-                                        for j in range(n_locs):
-                                            if i == j: 
-                                                row_dist.append(0)
-                                            else:
-                                                lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
-                                                lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
+                                            lat1, lon1 = np.radians(coords_grupo[i][0]), np.radians(coords_grupo[i][1])
+                                            lat2, lon2 = np.radians(coords_grupo[j][0]), np.radians(coords_grupo[j][1])
+                                            
+                                            a = np.sin((lat2-lat1)/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)**2
+                                            a = max(0.0, min(1.0, float(a)))
+                                            
+                                            distancia_metros = (2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35
+                                            
+                                            if math.isnan(distancia_metros):
+                                                distancia_metros = 0
                                                 
-                                                a = np.sin((lat2-lat1)/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2-lon1)/2)**2
-                                                a = max(0.0, min(1.0, float(a)))
-                                                
-                                                distancia_metros = (2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35
-                                                
-                                                if math.isnan(distancia_metros):
-                                                    distancia_metros = 0
-                                                    
-                                                row_dist.append(int(distancia_metros))
-                                        dist_matrix.append(row_dist)
+                                            row_dist.append(int(distancia_metros))
+                                    dist_matrix.append(row_dist)
 
-                                    manager = pywrapcp.RoutingIndexManager(n_locs, num_vehicles, 0)
-                                    routing = pywrapcp.RoutingModel(manager)
+                                manager = pywrapcp.RoutingIndexManager(n_locs, num_vehicles, 0)
+                                routing = pywrapcp.RoutingModel(manager)
 
-                                    def distance_callback(from_index, to_index):
-                                        return dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
-                                    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-                                    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+                                def distance_callback(from_index, to_index):
+                                    return dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+                                transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+                                routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-                                    def demand_callback(from_index):
-                                        return demandas[manager.IndexToNode(from_index)]
-                                    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-                                    
-                                    routing.AddDimensionWithVehicleCapacity(
-                                        demand_callback_index,
-                                        0,  
-                                        capacidades,
-                                        True,  
-                                        'Capacity'
-                                    )
+                                def demand_callback(from_index):
+                                    return demandas[manager.IndexToNode(from_index)]
+                                demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+                                
+                                routing.AddDimensionWithVehicleCapacity(
+                                    demand_callback_index,
+                                    0,  
+                                    capacidades,
+                                    True,  
+                                    'Capacity'
+                                )
+                                
+                                # --- NUEVO: Disjunctions (Permitir viajes sin asignar por capacidad) ---
+                                penalty = 10000000  # Penalidad alta para asegurar que rutee lo más que pueda
+                                for node in range(1, n_locs):
+                                    routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+                                # -----------------------------------------------------------------------
 
-                                    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+                                search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                
+                                solution = routing.SolveWithParameters(search_parameters)
+                                
+                                if solution:
                                     
-                                    solution = routing.SolveWithParameters(search_parameters)
-                                    
-                                    if solution:
-                                        cols_f = st.columns(num_vehicles)
-                                        for vehicle_id in range(num_vehicles):
-                                            index = routing.Start(vehicle_id)
-                                            secuencia = []
-                                            while not routing.IsEnd(index):
-                                                node = manager.IndexToNode(index)
-                                                if node != 0: secuencia.append(node - 1)
-                                                index = solution.Value(routing.NextVar(index))
+                                    # --- NUEVO: Detección de viajes que quedaron afuera ---
+                                    nodos_descartados = []
+                                    for node in range(1, n_locs):
+                                        if solution.Value(routing.NextVar(manager.NodeToIndex(node))) == manager.NodeToIndex(node):
+                                            nodos_descartados.append(node - 1)
+                                            
+                                    if len(nodos_descartados) > 0:
+                                        df_descartados = df_f_final.iloc[nodos_descartados].copy()
+                                        st.warning(f"⚠️ **Falta de Capacidad:** {len(nodos_descartados)} viaje(s) quedaron sin asignar porque los camiones están llenos. Se dejaron afuera los menos estratégicos.")
+                                        st.dataframe(df_descartados[[col_f_orden, col_f_cliente, col_f_dir, 'Zona de Venta']], hide_index=True)
+                                    # --------------------------------------------------------
+
+                                    cols_f = st.columns(num_vehicles)
+                                    for vehicle_id in range(num_vehicles):
+                                        index = routing.Start(vehicle_id)
+                                        secuencia = []
+                                        while not routing.IsEnd(index):
+                                            node = manager.IndexToNode(index)
+                                            if node != 0: secuencia.append(node - 1)
+                                            index = solution.Value(routing.NextVar(index))
+                                            
+                                        if len(secuencia) > 0:
+                                            sub_df = df_f_final.iloc[secuencia].copy()
+                                            movil_nom = nombres_moviles[vehicle_id]
+                                            
+                                            with cols_f[vehicle_id]:
+                                                st.markdown(f"### 🚚 {movil_nom}")
+                                                st.metric("Lugares Ocupados", f"{len(sub_df)} / {capacidades[vehicle_id]}")
                                                 
-                                            if len(secuencia) > 0:
-                                                sub_df = df_f_final.iloc[secuencia].copy()
-                                                movil_nom = nombres_moviles[vehicle_id]
+                                                rutas_links = []
+                                                coords_ord = sub_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
+                                                todas_c = [f"{depot_lat},{depot_lng}"] + coords_ord + [f"{depot_lat},{depot_lng}"]
                                                 
-                                                with cols_f[vehicle_id]:
-                                                    st.markdown(f"### 🚚 {movil_nom}")
-                                                    st.metric("Lugares Ocupados", f"{len(sub_df)} / {capacidades[vehicle_id]}")
+                                                for i in range(0, len(todas_c) - 1, 10):
+                                                    chunk = todas_c[i:i+11]
+                                                    wp_str = "|".join([urllib.parse.quote(w) for w in chunk[1:-1]])
+                                                    rutas_links.append(f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(chunk[0])}&destination={urllib.parse.quote(chunk[-1])}&waypoints={wp_str}&travelmode=driving")
+                                                
+                                                paso, txt_wa = 1, ""
+                                                for _, row in sub_df.iterrows():
+                                                    es_inst = str(row[col_f_clase]).strip().upper() == 'ZC04'
+                                                    icono = "🟢 INSTALACIÓN (Bajar Equipo)" if es_inst else "🔴 RETIRO (Subir Equipo)"
+                                                    fantasia = f" ({row.get('Nombre Fantasía','')})" if str(row.get('Nombre Fantasía','')).strip() else ""
                                                     
-                                                    rutas_links = []
-                                                    coords_ord = sub_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
-                                                    todas_c = [f"{depot_lat},{depot_lng}"] + coords_ord + [f"{depot_lat},{depot_lng}"]
+                                                    st.markdown(f"**{paso}. {row[col_f_cliente]}{fantasia}**")
+                                                    st.caption(f"📍 {row[col_f_dir]}")
+                                                    st.info(f"{icono} - Activo: {row[col_f_activo]}")
                                                     
-                                                    for i in range(0, len(todas_c) - 1, 10):
-                                                        chunk = todas_c[i:i+11]
-                                                        wp_str = "|".join([urllib.parse.quote(w) for w in chunk[1:-1]])
-                                                        rutas_links.append(f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(chunk[0])}&destination={urllib.parse.quote(chunk[-1])}&waypoints={wp_str}&travelmode=driving")
+                                                    txt_wa += f"%0A*{paso}. {row[col_f_cliente]}{fantasia}*%0A📍 {row[col_f_dir]}%0A🛠️ *{icono}* - Activo: {row[col_f_activo]}%0A"
+                                                    paso += 1
                                                     
-                                                    paso, txt_wa = 1, ""
-                                                    for _, row in sub_df.iterrows():
-                                                        es_inst = str(row[col_f_clase]).strip().upper() == 'ZC04'
-                                                        icono = "🟢 INSTALACIÓN (Bajar Equipo)" if es_inst else "🔴 RETIRO (Subir Equipo)"
-                                                        fantasia = f" ({row.get('Nombre Fantasía','')})" if str(row.get('Nombre Fantasía','')).strip() else ""
-                                                        
-                                                        st.markdown(f"**{paso}. {row[col_f_cliente]}{fantasia}**")
-                                                        st.caption(f"📍 {row[col_f_dir]}")
-                                                        st.info(f"{icono} - Activo: {row[col_f_activo]}")
-                                                        
-                                                        txt_wa += f"%0A*{paso}. {row[col_f_cliente]}{fantasia}*%0A📍 {row[col_f_dir]}%0A🛠️ *{icono}* - Activo: {row[col_f_activo]}%0A"
-                                                        paso += 1
-                                                        
-                                                    for idx_l, link_r in enumerate(rutas_links):
-                                                        st.link_button(f"🗺️ Abrir Ruta (Parte {idx_l + 1})", link_r)
-                                                        
-                                                    txt_links_wa = "🔗 *Link(s):*%0A" + "".join([f"{urllib.parse.quote(lr)}%0A%0A" for lr in rutas_links])
-                                                    msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Equipos a mover:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
-                                                    st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
-                                    else:
-                                        st.error("No se pudo encontrar una ruta viable con esas capacidades.")
+                                                for idx_l, link_r in enumerate(rutas_links):
+                                                    st.link_button(f"🗺️ Abrir Ruta (Parte {idx_l + 1})", link_r)
+                                                    
+                                                txt_links_wa = "🔗 *Link(s):*%0A" + "".join([f"{urllib.parse.quote(lr)}%0A%0A" for lr in rutas_links])
+                                                msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Equipos a mover:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
+                                                st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
+                                else:
+                                    st.error("No se pudo encontrar ninguna ruta viable.")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
