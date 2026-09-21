@@ -873,8 +873,6 @@ with tab3:
                             df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                             nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
                             
-                            # Eliminamos la validación de sum(capacidades) porque un camión puede hacer múltiples viajes (instala 1, retira 1)
-                            
                             with st.spinner("Optimizando rutas y cuidando la capacidad de las cajas..."):
                                 
                                 if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
@@ -889,14 +887,21 @@ with tab3:
                                 
                                 coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_final.iterrows()]
                                 
-                                # --- NUEVO: Demandas dinámicas (+1 ocupa, -1 libera) ---
-                                demandas = [0]
+                                # --- NUEVO: Separamos el cerebro en 3 reglas de demandas ---
+                                demandas_inst = [0]
+                                demandas_ret = [0]
+                                demandas_vol = [0]
+                                
                                 for _, row in df_f_final.iterrows():
                                     if str(row[col_f_clase]).strip().upper() == 'ZC04':
-                                        demandas.append(-1)
+                                        demandas_inst.append(1)   # Cuenta como 1 instalación nueva
+                                        demandas_ret.append(0)    
+                                        demandas_vol.append(-1)   # Libera 1 lugar físico en la caja
                                     else:
-                                        demandas.append(1)
-                                # ---------------------------------------------------------
+                                        demandas_inst.append(0)
+                                        demandas_ret.append(1)    # Cuenta como 1 equipo viejo
+                                        demandas_vol.append(1)    # Ocupa 1 lugar físico en la caja
+                                # -------------------------------------------------------------
                                 
                                 n_locs = len(coords_grupo)
                                 num_vehicles = len(capacidades)
@@ -930,20 +935,43 @@ with tab3:
                                 transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                 routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-                                def demand_callback(from_index):
-                                    return demandas[manager.IndexToNode(from_index)]
-                                demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-                                
-                                # --- NUEVO: Permitir salir cargado del depósito ---
+                                # --- REGLA 1: Tope de Instalaciones (Stock nuevo) ---
+                                def inst_callback(from_index):
+                                    return demandas_inst[manager.IndexToNode(from_index)]
+                                inst_callback_index = routing.RegisterUnaryTransitCallback(inst_callback)
                                 routing.AddDimensionWithVehicleCapacity(
-                                    demand_callback_index,
+                                    inst_callback_index,
                                     0,  
                                     capacidades,
-                                    False,  # <-- El parámetro False permite que el camión salga con instalaciones cargadas
-                                    'Capacity'
+                                    True,  
+                                    'Max_Instalaciones'
                                 )
-                                # --------------------------------------------------
+
+                                # --- REGLA 2: Tope de Retiros (Stock viejo) ---
+                                def ret_callback(from_index):
+                                    return demandas_ret[manager.IndexToNode(from_index)]
+                                ret_callback_index = routing.RegisterUnaryTransitCallback(ret_callback)
+                                routing.AddDimensionWithVehicleCapacity(
+                                    ret_callback_index,
+                                    0,  
+                                    capacidades,
+                                    True,  
+                                    'Max_Retiros'
+                                )
+
+                                # --- REGLA 3: Control de Sube y Baja en la Caja Físicamente ---
+                                def vol_callback(from_index):
+                                    return demandas_vol[manager.IndexToNode(from_index)]
+                                vol_callback_index = routing.RegisterUnaryTransitCallback(vol_callback)
+                                routing.AddDimensionWithVehicleCapacity(
+                                    vol_callback_index,
+                                    0,  
+                                    capacidades,
+                                    False,  # <-- Le permite empezar cargado desde el depósito
+                                    'Caja_Fisica'
+                                )
                                 
+                                # Permitimos dejar viajes sin asignar (multa altísima para obligarlo a rutear lo que más pueda)
                                 penalty = 10000000 
                                 for node in range(1, n_locs):
                                     routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
@@ -962,7 +990,7 @@ with tab3:
                                             
                                     if len(nodos_descartados) > 0:
                                         df_descartados = df_f_final.iloc[nodos_descartados].copy()
-                                        st.warning(f"⚠️ **Falta de Capacidad / Eficiencia:** {len(nodos_descartados)} viaje(s) quedaron sin asignar.")
+                                        st.warning(f"⚠️ **Falta de Capacidad:** {len(nodos_descartados)} viaje(s) quedaron sin asignar porque los camiones no dan abasto.")
                                         st.dataframe(df_descartados[[col_f_orden, col_f_cliente, col_f_dir, 'Zona de Venta']], hide_index=True)
 
                                     cols_f = st.columns(num_vehicles)
@@ -978,7 +1006,6 @@ with tab3:
                                             sub_df = df_f_final.iloc[secuencia].copy()
                                             movil_nom = nombres_moviles[vehicle_id]
                                             
-                                            # --- NUEVO: Métricas dinámicas para ver qué lleva el camión ---
                                             cant_inst = sum(sub_df[col_f_clase].astype(str).str.strip().str.upper() == 'ZC04')
                                             cant_ret = sum(sub_df[col_f_clase].astype(str).str.strip().str.upper() == 'ZC09')
                                             
@@ -986,7 +1013,6 @@ with tab3:
                                                 st.markdown(f"### 🚚 {movil_nom}")
                                                 st.metric("Paradas Totales", f"{len(sub_df)}")
                                                 st.caption(f"🟩 {cant_inst} Instalaciones | 🟥 {cant_ret} Retiros (Caja Máx: {capacidades[vehicle_id]})")
-                                            # ----------------------------------------------------------------
                                                 
                                                 rutas_links = []
                                                 coords_ord = sub_df.apply(lambda row: f"{row['lat']},{row['lng']}", axis=1).tolist()
