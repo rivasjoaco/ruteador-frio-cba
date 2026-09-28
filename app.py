@@ -873,7 +873,7 @@ with tab3:
                             df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                             nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
                             
-                            with st.spinner("Optimizando rutas y cuidando la capacidad de las cajas..."):
+                            with st.spinner("Aplicando leyes físicas de stock y trazando rutas..."):
                                 
                                 if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
                                     depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
@@ -887,21 +887,19 @@ with tab3:
                                 
                                 coords_grupo = [(depot_lat, depot_lng)] + [(row['lat'], row['lng']) for _, row in df_f_final.iterrows()]
                                 
-                                # --- NUEVO: Separamos el cerebro en 3 reglas de demandas ---
                                 demandas_inst = [0]
                                 demandas_ret = [0]
                                 demandas_vol = [0]
                                 
                                 for _, row in df_f_final.iterrows():
                                     if str(row[col_f_clase]).strip().upper() == 'ZC04':
-                                        demandas_inst.append(1)   # Cuenta como 1 instalación nueva
+                                        demandas_inst.append(1)   
                                         demandas_ret.append(0)    
-                                        demandas_vol.append(-1)   # Libera 1 lugar físico en la caja
+                                        demandas_vol.append(-1)   # Libera 1 lugar al bajar la heladera
                                     else:
                                         demandas_inst.append(0)
-                                        demandas_ret.append(1)    # Cuenta como 1 equipo viejo
-                                        demandas_vol.append(1)    # Ocupa 1 lugar físico en la caja
-                                # -------------------------------------------------------------
+                                        demandas_ret.append(1)    
+                                        demandas_vol.append(1)    # Ocupa 1 lugar al subir la heladera
                                 
                                 n_locs = len(coords_grupo)
                                 num_vehicles = len(capacidades)
@@ -920,7 +918,6 @@ with tab3:
                                             a = max(0.0, min(1.0, float(a)))
                                             
                                             distancia_metros = (2 * np.arcsin(np.sqrt(a))) * 6371000 * 1.35
-                                            
                                             if math.isnan(distancia_metros):
                                                 distancia_metros = 0
                                                 
@@ -935,43 +932,39 @@ with tab3:
                                 transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                                 routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-                                # --- REGLA 1: Tope de Instalaciones (Stock nuevo) ---
+                                # DIMENSIONES
                                 def inst_callback(from_index):
                                     return demandas_inst[manager.IndexToNode(from_index)]
                                 inst_callback_index = routing.RegisterUnaryTransitCallback(inst_callback)
-                                routing.AddDimensionWithVehicleCapacity(
-                                    inst_callback_index,
-                                    0,  
-                                    capacidades,
-                                    True,  
-                                    'Max_Instalaciones'
-                                )
+                                routing.AddDimensionWithVehicleCapacity(inst_callback_index, 0, capacidades, True, 'Max_Instalaciones')
 
-                                # --- REGLA 2: Tope de Retiros (Stock viejo) ---
                                 def ret_callback(from_index):
                                     return demandas_ret[manager.IndexToNode(from_index)]
                                 ret_callback_index = routing.RegisterUnaryTransitCallback(ret_callback)
-                                routing.AddDimensionWithVehicleCapacity(
-                                    ret_callback_index,
-                                    0,  
-                                    capacidades,
-                                    True,  
-                                    'Max_Retiros'
-                                )
+                                routing.AddDimensionWithVehicleCapacity(ret_callback_index, 0, capacidades, True, 'Max_Retiros')
 
-                                # --- REGLA 3: Control de Sube y Baja en la Caja Físicamente ---
                                 def vol_callback(from_index):
                                     return demandas_vol[manager.IndexToNode(from_index)]
                                 vol_callback_index = routing.RegisterUnaryTransitCallback(vol_callback)
-                                routing.AddDimensionWithVehicleCapacity(
-                                    vol_callback_index,
-                                    0,  
-                                    capacidades,
-                                    False,  # <-- Le permite empezar cargado desde el depósito
-                                    'Caja_Fisica'
-                                )
+                                routing.AddDimensionWithVehicleCapacity(vol_callback_index, 0, capacidades, False, 'Caja_Fisica')
                                 
-                                # Permitimos dejar viajes sin asignar (multa altísima para obligarlo a rutear lo que más pueda)
+                                # --- NUEVO: DOBLE CANDADO MATEMÁTICO (Chau Heladera Mágica) ---
+                                inst_dim = routing.GetDimensionOrDie('Max_Instalaciones')
+                                ret_dim = routing.GetDimensionOrDie('Max_Retiros')
+                                caja_dim = routing.GetDimensionOrDie('Caja_Fisica')
+                                solver = routing.solver()
+                                
+                                for v in range(num_vehicles):
+                                    start_idx = routing.Start(v)
+                                    end_idx = routing.End(v)
+                                    
+                                    # 1. El camión debe volver al depósito teniendo en la caja EXACTAMENTE los retiros que hizo
+                                    solver.Add(caja_dim.CumulVar(end_idx) == ret_dim.CumulVar(end_idx))
+                                    
+                                    # 2. El camión debe salir del depósito teniendo en la caja EXACTAMENTE las instalaciones que va a hacer
+                                    solver.Add(caja_dim.CumulVar(start_idx) == inst_dim.CumulVar(end_idx))
+                                # --------------------------------------------------------------
+                                
                                 penalty = 10000000 
                                 for node in range(1, n_locs):
                                     routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
@@ -982,7 +975,6 @@ with tab3:
                                 solution = routing.SolveWithParameters(search_parameters)
                                 
                                 if solution:
-                                    
                                     nodos_descartados = []
                                     for node in range(1, n_locs):
                                         if solution.Value(routing.NextVar(manager.NodeToIndex(node))) == manager.NodeToIndex(node):
@@ -990,7 +982,7 @@ with tab3:
                                             
                                     if len(nodos_descartados) > 0:
                                         df_descartados = df_f_final.iloc[nodos_descartados].copy()
-                                        st.warning(f"⚠️ **Falta de Capacidad:** {len(nodos_descartados)} viaje(s) quedaron sin asignar porque los camiones no dan abasto.")
+                                        st.warning(f"⚠️ **Falta de Capacidad:** {len(nodos_descartados)} viaje(s) quedaron sin asignar por falta de espacio físico en las cajas.")
                                         st.dataframe(df_descartados[[col_f_orden, col_f_cliente, col_f_dir, 'Zona de Venta']], hide_index=True)
 
                                     cols_f = st.columns(num_vehicles)
@@ -1043,6 +1035,6 @@ with tab3:
                                                 msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Paradas:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
                                                 st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
                                 else:
-                                    st.error("No se pudo encontrar ninguna ruta viable.")
+                                    st.error("No se pudo encontrar ninguna ruta viable. Verificá las capacidades.")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
