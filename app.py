@@ -873,7 +873,7 @@ with tab3:
                             df_flota_ed['Móvil'] = df_flota_ed['Móvil'].fillna('Móvil Sin Nombre')
                             nombres_moviles = (df_flota_ed['Proveedor'] + " - " + df_flota_ed['Móvil']).tolist()
                             
-                            with st.spinner("Aplicando leyes físicas de stock y trazando rutas..."):
+                            with st.spinner("Optimizando rutas (Límite de 10 segundos para no colgarse)..."):
                                 
                                 if origen_fletes.strip() == config_actual.get("depot_address", "").strip():
                                     depot_lat, depot_lng = config_actual["depot_coords"][0], config_actual["depot_coords"][1]
@@ -948,7 +948,6 @@ with tab3:
                                 vol_callback_index = routing.RegisterUnaryTransitCallback(vol_callback)
                                 routing.AddDimensionWithVehicleCapacity(vol_callback_index, 0, capacidades, False, 'Caja_Fisica')
                                 
-                                # --- NUEVO: DOBLE CANDADO MATEMÁTICO (Chau Heladera Mágica) ---
                                 inst_dim = routing.GetDimensionOrDie('Max_Instalaciones')
                                 ret_dim = routing.GetDimensionOrDie('Max_Retiros')
                                 caja_dim = routing.GetDimensionOrDie('Caja_Fisica')
@@ -957,20 +956,22 @@ with tab3:
                                 for v in range(num_vehicles):
                                     start_idx = routing.Start(v)
                                     end_idx = routing.End(v)
-                                    
-                                    # 1. El camión debe volver al depósito teniendo en la caja EXACTAMENTE los retiros que hizo
                                     solver.Add(caja_dim.CumulVar(end_idx) == ret_dim.CumulVar(end_idx))
-                                    
-                                    # 2. El camión debe salir del depósito teniendo en la caja EXACTAMENTE las instalaciones que va a hacer
                                     solver.Add(caja_dim.CumulVar(start_idx) == inst_dim.CumulVar(end_idx))
-                                # --------------------------------------------------------------
                                 
                                 penalty = 10000000 
                                 for node in range(1, n_locs):
                                     routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
 
+                                # --- EL SALVAVIDAS: Cambio de cerebro y reloj de 10 segundos ---
                                 search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-                                search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+                                # Cambiamos la estrategia inicial a Inserción Paralela (especial para PickUp and Delivery)
+                                search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+                                # Activamos Búsqueda Local Guiada
+                                search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+                                # Cortamos obligatoriamente a los 10 segundos
+                                search_parameters.time_limit.seconds = 10
+                                # ---------------------------------------------------------------
                                 
                                 solution = routing.SolveWithParameters(search_parameters)
                                 
@@ -1035,6 +1036,7 @@ with tab3:
                                                 msg_wa = f"🚚 *FLETES - {movil_nom.upper()}*%0A📊 *Paradas:* {len(sub_df)}%0A----------------------------------------%0A📋 *DETALLE:*%0A{txt_wa}----------------------------------------%0A{txt_links_wa}"
                                                 st.link_button("💬 Enviar por WhatsApp", f"https://api.whatsapp.com/send?text={msg_wa}")
                                 else:
-                                    st.error("No se pudo encontrar ninguna ruta viable. Verificá las capacidades.")
+                                    st.error("La ruta es físicamente imposible. Los camiones no dan abasto ni siquiera omitiendo clientes.")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
+
