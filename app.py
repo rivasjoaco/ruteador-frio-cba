@@ -135,7 +135,7 @@ def geocodificar_google(dir_texto, ubicacion_geografica):
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API", False
 
 # --- CREACIÓN DE PESTAÑAS ---
-tab1, tab2, tab3 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)"])
+tab1, tab2, tab3, tab4 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)", "📊 Estadísticas de Uso"])
 
 # ==========================================
 # PESTAÑA 1: RUTEO ORIGINAL (EXCEL)
