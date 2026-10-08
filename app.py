@@ -1,15 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import urllib.parse
 import re
 import unicodedata
 import math
 import googlemaps
 import folium
-from datetime import date
-import plotly.express as px
 from streamlit_folium import st_folium
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
@@ -138,7 +135,7 @@ def geocodificar_google(dir_texto, ubicacion_geografica):
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API", False
 
 # --- CREACIÓN DE PESTAÑAS ---
-tab1, tab2, tab3, tab4 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)", "📊 Estadísticas de Uso"])
+tab1, tab2, tab3 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)"])
 
 # ==========================================
 # PESTAÑA 1: RUTEO ORIGINAL (EXCEL)
@@ -416,7 +413,6 @@ with tab1:
                                 st.session_state.borrador_rutas = None
 
                             if st.button("⚡ 1. Generar Borrador de Rutas", type="primary"):
-                                registrar_uso("Reparaciones (ZC02)", len(df_locales))
                                 with st.spinner("Calculando ruteo matemático inicial..."):
                                     if origen_personalizado.strip() == config_actual["depot_address"].strip():
                                         depot_lat, depot_lng, direccion_origen_final = config_actual["depot_coords"][0], config_actual["depot_coords"][1], config_actual["depot_address"]
@@ -614,7 +610,6 @@ with tab2:
         btn_planificar = st.button("🚀 Generar Planificación", type="primary", use_container_width=True)
         
     if btn_planificar and clientes_input:
-        registrar_uso("Planificador Masivo", len([c for c in re.split(r'[\s,]+', clientes_input.strip()) if c]))
         if DF_MAESTRO.empty:
             st.error("🚨 No se encontró maestro_clientes.csv para extraer los datos.")
         else:
@@ -870,7 +865,6 @@ with tab3:
                         st.success(f"✅ Se seleccionaron **{len(df_f_final)}** movimientos logísticos.")
                         
                         if st.button("🚀 Calcular Ruteo Logístico Dinámico", type="primary"):
-                            registrar_uso("Fletes (ZC04/ZC09)", len(df_f_final))
                             
                             df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1).astype(int)
                             capacidades = df_flota_ed['Capacidad_Equipos'].tolist()
@@ -1045,46 +1039,3 @@ with tab3:
                                     st.error("La ruta es físicamente imposible. Los camiones no dan abasto ni siquiera omitiendo clientes.")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
-
-
-
-# ==========================================
-# PESTAÑA 4: TABLERO DE USO (KPIs)
-# ==========================================
-with tab4:
-    st.markdown("### 📈 Adopción de la Herramienta por Módulo")
-    
-    if os.path.exists("historial_uso.csv"):
-        df_uso = pd.read_csv("historial_uso.csv")
-        df_agrupado = df_uso.groupby(["Fecha", "Módulo"])["Destinos Ruteados"].sum().reset_index()
-        matriz_uso = df_agrupado.pivot(index="Fecha", columns="Módulo", values="Destinos Ruteados").fillna(0)
-        
-        modulos_esperados = ["Reparaciones (ZC02)", "Planificador Masivo", "Fletes (ZC04/ZC09)"]
-        for mod in modulos_esperados:
-            if mod not in matriz_uso.columns:
-                matriz_uso[mod] = 0
-                
-        matriz_uso = matriz_uso[modulos_esperados].sort_index(ascending=False)
-        
-        fig = px.imshow(
-            matriz_uso,
-            text_auto=True,
-            aspect="auto",
-            color_continuous_scale=[(0, "#e0e0e0"), (1, "#2ecc71")],
-            labels=dict(x="Módulo Operativo", y="Día de Operación", color="Destinos Ruteados")
-        )
-        
-        fig.update_xaxes(side="top")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.divider()
-        st.markdown("#### 📥 Descargar Datos Crudos")
-        with open("historial_uso.csv", "rb") as file:
-            st.download_button(
-                label="Descargar Historial CSV",
-                data=file,
-                file_name="auditoria_ruteador.csv",
-                mime="text/csv"
-            )
-    else:
-        st.info("Aún no hay datos de uso registrados. La matriz aparecerá cuando se realice el primer ruteo.")
