@@ -7,3 +7,4 @@ ortools
 googlemaps
 folium
 streamlit-folium
+plotly
