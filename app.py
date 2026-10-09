@@ -7,6 +7,9 @@ import unicodedata
 import math
 import googlemaps
 import folium
+import os                    # NUEVO: Para crear el archivo
+from datetime import date    # NUEVO: Para saber el día de hoy
+import plotly.express as px  # NUEVO: Para dibujar la matriz
 from streamlit_folium import st_folium
 from sklearn.cluster import KMeans
 from ortools.constraint_solver import routing_enums_pb2
@@ -17,6 +20,25 @@ st.set_page_config(
     page_icon="🚚",
     layout="wide"
 )
+
+# ==========================================
+# FUNCIÓN ESPÍA (TELEMETRÍA DE USO)
+# ==========================================
+def registrar_uso(modulo, cantidad_destinos):
+    """Guarda silenciosamente la actividad en un CSV local"""
+    archivo_uso = "historial_uso.csv"
+    fecha_hoy = date.today().strftime("%Y-%m-%d")
+    
+    nuevo_registro = pd.DataFrame([{
+        "Fecha": fecha_hoy, 
+        "Módulo": modulo, 
+        "Destinos Ruteados": cantidad_destinos
+    }])
+    
+    if not os.path.exists(archivo_uso):
+        nuevo_registro.to_csv(archivo_uso, mode='w', header=True, index=False)
+    else:
+        nuevo_registro.to_csv(archivo_uso, mode='a', header=False, index=False)
 
 # Configuración de Centros y Depósitos Base
 CENTROS_CONFIG = {
@@ -134,8 +156,8 @@ def geocodificar_google(dir_texto, ubicacion_geografica):
     except Exception:
         return config_actual["depot_coords"][0], config_actual["depot_coords"][1], f"ERROR API", False
 
-# --- CREACIÓN DE PESTAÑAS ---
-tab1, tab2, tab3 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)"])
+# --- CREACIÓN DE LAS 4 PESTAÑAS ---
+tab1, tab2, tab3, tab4 = st.tabs(["🚛 Reparaciones (ZC02)", "📅 Planificador Masivo", "📦 Fletes (ZC04 / ZC09)", "📊 Estadísticas de Uso"])
 
 # ==========================================
 # PESTAÑA 1: RUTEO ORIGINAL (EXCEL)
@@ -413,6 +435,9 @@ with tab1:
                                 st.session_state.borrador_rutas = None
 
                             if st.button("⚡ 1. Generar Borrador de Rutas", type="primary"):
+                                # GATILLO 1: Estadísticas de Reparaciones
+                                registrar_uso("Reparaciones (ZC02)", len(df_locales))
+                                
                                 with st.spinner("Calculando ruteo matemático inicial..."):
                                     if origen_personalizado.strip() == config_actual["depot_address"].strip():
                                         depot_lat, depot_lng, direccion_origen_final = config_actual["depot_coords"][0], config_actual["depot_coords"][1], config_actual["depot_address"]
@@ -631,6 +656,9 @@ with tab2:
                 st.warning(f"⚠️ **{len(clientes_faltantes)} clientes no encontrados en el Maestro:** " + ", ".join(clientes_faltantes))
             
             if not df_plan.empty:
+                # GATILLO 2: Estadísticas del Planificador Masivo
+                registrar_uso("Planificador Masivo", len(df_plan))
+
                 with st.spinner("Trazando ruta maestra y dividiendo por días..."):
                     def limpiar_coord_multi(val):
                         s = str(val).strip()
@@ -866,6 +894,9 @@ with tab3:
                         
                         if st.button("🚀 Calcular Ruteo Logístico Dinámico", type="primary"):
                             
+                            # GATILLO 3: Estadísticas de Fletes
+                            registrar_uso("Fletes (ZC04/ZC09)", len(df_f_final))
+                            
                             df_flota_ed['Capacidad_Equipos'] = pd.to_numeric(df_flota_ed['Capacidad_Equipos'], errors='coerce').fillna(1).astype(int)
                             capacidades = df_flota_ed['Capacidad_Equipos'].tolist()
                             
@@ -1039,3 +1070,50 @@ with tab3:
                                     st.error("La ruta es físicamente imposible. Los camiones no dan abasto ni siquiera omitiendo clientes.")
         except Exception as e:
             st.error(f"Error procesando archivo: {e}")
+
+# ==========================================
+# PESTAÑA 4: ESTADÍSTICAS DE USO (KPIs)
+# ==========================================
+with tab4:
+    st.markdown("### 📈 Adopción de la Herramienta por Módulo")
+    
+    if os.path.exists("historial_uso.csv"):
+        df_uso = pd.read_csv("historial_uso.csv")
+        
+        # Agrupamos por Fecha y Módulo
+        df_agrupado = df_uso.groupby(["Fecha", "Módulo"])["Destinos Ruteados"].sum().reset_index()
+        
+        # Pivoteamos para armar la matriz
+        matriz_uso = df_agrupado.pivot(index="Fecha", columns="Módulo", values="Destinos Ruteados").fillna(0)
+        
+        # Aseguramos que siempre existan las 3 columnas
+        modulos_esperados = ["Reparaciones (ZC02)", "Planificador Masivo", "Fletes (ZC04/ZC09)"]
+        for mod in modulos_esperados:
+            if mod not in matriz_uso.columns:
+                matriz_uso[mod] = 0
+                
+        matriz_uso = matriz_uso[modulos_esperados].sort_index(ascending=False)
+        
+        # Dibujamos el Heatmap de Plotly
+        fig = px.imshow(
+            matriz_uso,
+            text_auto=True,
+            aspect="auto",
+            color_continuous_scale=[(0, "#e0e0e0"), (1, "#2ecc71")],
+            labels=dict(x="Módulo Operativo", y="Día de Operación", color="Destinos Ruteados")
+        )
+        
+        fig.update_xaxes(side="top")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        st.markdown("#### 📥 Descargar Datos Crudos")
+        with open("historial_uso.csv", "rb") as file:
+            st.download_button(
+                label="Descargar Historial CSV",
+                data=file,
+                file_name="auditoria_ruteador.csv",
+                mime="text/csv"
+            )
+    else:
+        st.info("Aún no hay datos de uso registrados. La matriz aparecerá cuando hagas el primer ruteo.")
